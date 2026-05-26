@@ -1,0 +1,44 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install packaging dependencies
+        run: pip install -r requirements-windows.txt
+      - name: Run engine regression tests
+        run: python -m unittest discover -s tests -v
+      - name: Build portable application
+        run: pyinstaller --noconfirm --windowed --name FullSpectrumStudio --add-data "fullspectrum_engine.py;." desktop/full_spectrum_studio.py
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release
+          Compress-Archive -Path dist/FullSpectrumStudio/* -DestinationPath release/FullSpectrum-Studio-Windows-Portable-v0.3.0.zip -Force
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Build installer
+        shell: pwsh
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/FullSpectrumStudio.iss'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FullSpectrum-Studio-Windows
+          path: release/*
+      - name: Attach Windows downloads to tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${env:GITHUB_REF_NAME}" release/* --clobber

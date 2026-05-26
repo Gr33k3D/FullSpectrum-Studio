@@ -1,0 +1,22 @@
+{
+  "filaments": [
+    {
+      "name": "Example Brand Natural White",
+      "brand": "Example Brand",
+      "series": "PLA Basic",
+      "color": "#F4F1EA"
+    },
+    {
+      "name": "Example Brand Deep Black",
+      "brand": "Example Brand",
+      "series": "PLA Basic",
+      "color": "#101214"
+    },
+    {
+      "name": "Example Brand Ocean Blue",
+      "brand": "Example Brand",
+      "series": "PLA Basic",
+      "color": "#2479A7"
+    }
+  ]
+}
