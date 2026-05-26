@@ -1,107 +1,120 @@
 # FullSpectrum Studio
 
 FullSpectrum Studio is a local desktop workflow for reducing the physical
-filament count of painted Bambu Studio `.3mf` projects while preserving the
-project's painted-facet meaning. It creates a separate converted `.3mf`, a
-recipe CSV and a validation report. The source project is never overwritten.
+filament count of painted Bambu Studio `.3mf` projects while trying to preserve
+their original painted appearance.
 
-This is an independent community preview for experimentation with the H2C
-public-beta workflow. It is not affiliated with Bambu Lab.
+It creates a separate converted `.3mf`, a recipe CSV and a validation report.
+The source project is never modified.
+
+This is an independent community preview built around the H2C public-beta
+workflow and is not affiliated with Bambu Lab.
 
 ## What It Does
 
-- Decodes Bambu's serialized `paint_color` states from the model itself; it
-  does not assume that code order equals filament order.
-- Chooses `2-6` physical filament anchors, automatically or explicitly, then
-  places generated mixed recipes after the physical slots.
-- Uses local Bambu Studio Beta inventory in read-only mode, a supported Bambu
-  PLA planning palette, exact CMYKW roles, or a custom local filament library.
+- Reads Bambu `paint_color` information directly from the project instead of
+  assuming paint order equals filament order.
+- Chooses `2–6` physical filament anchors automatically or manually and places
+  generated mixed recipes after the physical slots.
+- Supports local Bambu Studio Beta inventory in read-only mode, supported
+  Bambu PLA planning palettes, CMYKW workflows and custom local filament
+  libraries.
 - Accepts an optional `.obj`, `.glb` or texture image as a visual reference and
   reports an estimated similarity score.
-- Provides a movable painted preview on macOS, progress, recipe display,
-  quality estimates and optional opening of the validated result.
+- Provides preview, progress feedback, recipe display, quality estimates and
+  optional opening of the validated result.
 
-## Validation Guarantees
+---
 
-Every output is reopened before it is accepted. The engine rejects an output if:
+## Validation
 
-- A `paint_color` state refers to a slot that does not exist.
-- A mixed slot references itself, another mixed slot, a duplicate component or
-  a component outside the selected physical slots.
-- Slot arrays or purge matrices are misaligned, or an output purge matrix
-  contains a zero off-diagonal transition.
-- Any object geometry or UV-bearing model data changed beyond `paint_color`, or
-  any source texture/resource changed byte-for-byte.
+Outputs are validated before export.
 
-The converter reads ZIP contents defensively and rejects unsafe archive paths
-and excessive uncompressed archive sizes.
+The engine rejects outputs if:
+
+- A `paint_color` references a slot that does not exist.
+- A mixed slot references itself, another mixed slot, duplicate components or
+  components outside the selected physical slots.
+- Slot arrays or purge matrices become invalid.
+- Geometry, UV data or source textures are unintentionally modified.
+
+Archive extraction is handled defensively and unsafe archive paths or abnormal
+archive sizes are rejected.
+
+---
 
 ## Filament Choices
 
-`My Inventory` is the safest practical option: it selects only active PLA
-spools visible in the local Bambu Studio Beta inventory and estimates mix
-capacity from remaining material.
+### My Inventory
 
-`Bambu Core` plans with supported PLA Basic, PLA Matte and PLA Silk+ colors.
-`All Bambu` additionally permits other active Bambu PLA families discovered in
-your local inventory. Catalog colors are planning suggestions; confirm
-regional availability before buying.
+Recommended for practical printing.
 
-`Exact CMYKW` assigns literal CMYKW roles. `CMYKW` with inventory maps those
-roles to owned colors and shows a warning when the match is poor. Mixed-color
-preview and quality scores are perceptual estimates, not printer calibration.
+Uses only active PLA spools detected in the local Bambu Studio Beta inventory
+and estimates available mixing capacity from remaining material.
 
-`Custom Brands` accepts a JSON file in the format shown at
-[examples/custom-palette.example.json](examples/custom-palette.example.json).
+### Bambu Core
+
+Uses supported:
+
+- PLA Basic
+- PLA Matte
+- PLA Silk+
+
+### All Bambu
+
+Allows additional Bambu PLA families discovered locally.
+
+Catalog colors are suggestions only — confirm regional availability before
+buying.
+
+### Exact CMYKW
+
+Assigns literal CMYKW roles.
+
+### CMYKW + Inventory
+
+Maps those roles to owned colors and warns when similarity becomes poor.
+
+Mixed-color preview and quality estimates are visual approximations and not a
+replacement for printer calibration.
+
+### Custom Brands
+
+Accepts a JSON file using:
+
+`examples/custom-palette.example.json`
+
+---
 
 ## Reference Mode
 
-Reference mode samples the texture from a `.glb`, an OBJ material texture, or
-an image and compares dominant colors with the predicted reduced palette. It is
-an optimization target and before/after aid; it does not turn raw OBJ/GLB
-geometry into a printable Bambu project. Conversion still requires a painted
-`.3mf` as the output structure and paint source.
+Reference mode samples texture information from:
+
+- `.glb`
+- `.obj` material textures
+- image files
+
+It compares dominant colors against the predicted reduced palette.
+
+Reference mode acts as an optimization target and before/after aid.
+
+It does not convert raw OBJ/GLB geometry into printable Bambu projects.
+
+Conversion still requires a painted `.3mf` as the source and output structure.
+
+---
 
 ## macOS App
 
-Requirements: macOS 14 or newer, Swift 5.9 / Xcode command-line tools, and
-Python 3 supplied with macOS.
+Requirements:
+
+- macOS 14+
+- Swift 5.9
+- Xcode Command Line Tools
+- Python included with macOS
+
+Build:
 
 ```bash
 ./script/build_and_run.sh build
 ./script/build_and_run.sh run
-```
-
-The built application is written to `dist/FullSpectrum Studio.app`.
-
-## Windows App
-
-Windows uses the same Python conversion and validation engine in a compact
-desktop shell. Tagged releases build both a portable ZIP and an installer using
-the workflow in [.github/workflows/windows-release.yml](.github/workflows/windows-release.yml).
-The macOS orbitable SceneKit preview is not present in this initial Windows UI.
-
-## Command Line
-
-```bash
-python3 fullspectrum_engine.py --mode official --palette-source inventory \
-  --real-slots auto --reference original.glb painted-project.3mf
-```
-
-## Privacy And Safety
-
-- Inventory access is local and read-only. No spool identifiers are written to
-  output reports or committed assets.
-- Generated projects, local inventories and private screenshots are ignored by
-  version control.
-- Before printing, verify filament assignments, purge values and slicing in
-  Bambu Studio; appearance still depends on physical filament and calibration.
-
-Further detail: [Architecture](docs/ARCHITECTURE.md), [Validation and Testing](docs/VALIDATION.md),
-[Security and Privacy](docs/SECURITY_PRIVACY.md), and [0.3 Release Notes](docs/RELEASE_NOTES_0.3.md).
-
-## License
-
-Released under the [PolyForm Noncommercial License 1.0.0](LICENSE). It is
-shared for non-commercial community use and modification; it is not an
-OSI-approved open-source license and does not permit commercial exploitation.
