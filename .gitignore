@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+__MACOSX/
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+build/
+*.egg-info/
+
+# Local app/package artifacts
+# Keep /release/*.zip if you want downloadable releases in the repo.
