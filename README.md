@@ -10,7 +10,7 @@ The source project is never modified.
 This is an independent community preview built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest reliability update: [v0.4.1 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.1-community-preview).
+Latest reliability update: [v0.4.2 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.2-community-preview).
 
 ## What It Does
 
@@ -38,8 +38,9 @@ Latest reliability update: [v0.4.1 Community Preview](https://github.com/Gr33k3D
 Preview estimates from a validated local test project; this is not a calibrated
 printed-color measurement.
 
-The displayed analysis image was produced with v0.4; v0.4.1 preserves that
-workflow and adds the large-file loading guard.
+The displayed analysis image was produced with v0.4; v0.4.2 preserves that
+workflow and includes the large-file loading guard and reliable native file
+pickers for source/reference selection.
 
 ## Validation
 
@@ -188,6 +189,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
 - [0.4.1 Reliability Notes](docs/RELEASE_NOTES_0.4.1.md)
+- [0.4.2 Button Fix Notes](docs/RELEASE_NOTES_0.4.2.md)
 
 ## License
 

@@ -48,9 +48,9 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.4.1</string>
+  <string>0.4.2</string>
   <key>CFBundleVersion</key>
-  <string>5</string>
+  <string>6</string>
   <key>CFBundleGetInfoString</key>
   <string>Community Preview - validated local reduced-filament workflow</string>
   <key>LSMinimumSystemVersion</key>

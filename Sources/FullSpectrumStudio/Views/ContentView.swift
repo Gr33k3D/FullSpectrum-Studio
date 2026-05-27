@@ -1,18 +1,7 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject private var store: StudioStore
-
-    private var sourceTypes: [UTType] {
-        ["3mf", "obj", "glb"].map { UTType(filenameExtension: $0) ?? .data }
-    }
-    private var referenceTypes: [UTType] {
-        ["obj", "glb", "png", "jpg", "jpeg", "bmp", "tif"].map { UTType(filenameExtension: $0) ?? .data }
-    }
-    private var textureTypes: [UTType] {
-        ["png", "jpg", "jpeg"].map { UTType(filenameExtension: $0) ?? .image }
-    }
 
     var body: some View {
         ZStack {
@@ -47,42 +36,6 @@ struct ContentView: View {
                     }
                 }
                 .padding(24)
-            }
-        }
-        .fileImporter(
-            isPresented: $store.showingImporter,
-            allowedContentTypes: sourceTypes,
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                store.accept(url: url)
-            }
-        }
-        .fileImporter(
-            isPresented: $store.showingReferenceImporter,
-            allowedContentTypes: referenceTypes,
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                store.acceptReference(url: url)
-            }
-        }
-        .fileImporter(
-            isPresented: $store.showingCustomPaletteImporter,
-            allowedContentTypes: [.json],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                store.acceptCustomPalette(url: url)
-            }
-        }
-        .fileImporter(
-            isPresented: $store.showingTextureImporter,
-            allowedContentTypes: textureTypes,
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                store.acceptTextureOverride(url: url)
             }
         }
         .onOpenURL { url in
@@ -163,14 +116,14 @@ private struct HeaderView: View {
             )
 
             Button {
-                store.showingImporter = true
+                store.chooseSourceFile()
             } label: {
                 Label("Open Source", systemImage: "plus")
             }
             .buttonStyle(StudioButtonStyle(prominent: false))
 
             Button {
-                store.showingReferenceImporter = true
+                store.chooseReferenceFile()
             } label: {
                 Label("Reference", systemImage: "photo.on.rectangle")
             }

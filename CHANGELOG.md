@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.2 Community Preview - 2026-05-27
+
+### Fixed
+
+- Replaces stacked SwiftUI file-import presentations with a reliable native
+  macOS file panel for source, reference, OBJ texture and custom-library
+  selection.
+- Makes `Compose Palette` open the correct native chooser when a required
+  source or custom filament library has not yet been selected.
+- Provides immediate status feedback while a file chooser is open and restores
+  the previous status if selection is cancelled.
+
 ## 0.4.1 Community Preview - 2026-05-27
 
 ### Fixed

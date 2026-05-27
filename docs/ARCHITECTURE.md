@@ -33,6 +33,11 @@ the application to a disproportionate display allocation. Background preview
 results are generation-scoped, so an older file cannot replace a newer
 selection when it finishes later.
 
+The macOS shell opens source, reference, custom-library and OBJ-texture files
+through one native `NSOpenPanel` path. This avoids competing view-level
+presentation modifiers and makes every file-selection button perform the same
+observable action.
+
 ## Components
 
 - `fullspectrum_engine.py`: conversion, codec, reference analysis and validation.

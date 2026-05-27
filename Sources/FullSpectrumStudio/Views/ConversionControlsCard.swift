@@ -84,7 +84,7 @@ struct ConversionControlsCard: View {
 
             HStack(spacing: 10) {
                 Button(store.referenceURL == nil ? "Add Reference" : "Change Reference") {
-                    store.showingReferenceImporter = true
+                    store.chooseReferenceFile()
                 }
                 .font(.caption.weight(.medium))
                 .buttonStyle(.plain)
@@ -92,7 +92,7 @@ struct ConversionControlsCard: View {
 
                 if store.paletteSource == .custom {
                     Button(store.customPaletteURL == nil ? "Choose Library" : "Change Library") {
-                        store.showingCustomPaletteImporter = true
+                        store.chooseCustomPaletteFile()
                     }
                     .font(.caption.weight(.medium))
                     .buttonStyle(.plain)
@@ -100,7 +100,7 @@ struct ConversionControlsCard: View {
                 }
                 if store.selectedFile?.pathExtension.lowercased() == "obj" {
                     Button(store.textureOverrideURL == nil ? "Add OBJ Texture" : "Change OBJ Texture") {
-                        store.showingTextureImporter = true
+                        store.chooseTextureFile()
                     }
                     .font(.caption.weight(.medium))
                     .buttonStyle(.plain)

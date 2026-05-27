@@ -1,11 +1,12 @@
-# FullSpectrum Studio v0.4 / v0.4.1 Final Report
+# FullSpectrum Studio v0.4 - v0.4.2 Final Report
 
 ## Release Decision
 
 Version `0.4.0-community-preview` established the improved conversion and
-validation workflow. Version `0.4.1-community-preview` is the release to use:
-it fixes a large-project loading regression while keeping experimental source
-import clearly labelled and bounded.
+validation workflow. Version `0.4.1-community-preview` fixed a large-project
+loading regression. Version `0.4.2-community-preview` is the release to use:
+it also fixes file-selection buttons that could fail to open a chooser in the
+macOS app.
 
 FullSpectrum remains:
 

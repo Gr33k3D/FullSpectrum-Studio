@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class StudioStore: ObservableObject {
@@ -29,10 +30,6 @@ final class StudioStore: ObservableObject {
     @Published var isWorking = false
     @Published var isBuildingPreview = false
     @Published var isRefreshingInventory = false
-    @Published var showingImporter = false
-    @Published var showingReferenceImporter = false
-    @Published var showingTextureImporter = false
-    @Published var showingCustomPaletteImporter = false
     @Published var progress = 0.0
     @Published var progressMessage = "Waiting for a model."
     @AppStorage("autoOpenValidatedOutput") var autoOpenValidatedOutput = true
@@ -69,6 +66,82 @@ final class StudioStore: ObservableObject {
                 errorMessage = error.localizedDescription
             }
             isRefreshingInventory = false
+        }
+    }
+
+    func chooseSourceFile() {
+        chooseFile(
+            title: "Open Painted 3MF or Textured Model",
+            message: "Choose a painted Bambu 3MF, or an experimental textured OBJ / GLB source.",
+            extensions: ["3mf", "obj", "glb"],
+            choosingStatus: "Choose a painted .3mf, textured .obj or .glb source."
+        ) { [weak self] url in
+            self?.accept(url: url)
+        }
+    }
+
+    func chooseReferenceFile() {
+        chooseFile(
+            title: "Add Visual Reference",
+            message: "Choose an OBJ, GLB or texture image used only as a visual target.",
+            extensions: ["obj", "glb", "png", "jpg", "jpeg", "bmp", "tif", "tiff"],
+            choosingStatus: "Choose an OBJ, GLB or texture image reference."
+        ) { [weak self] url in
+            self?.acceptReference(url: url)
+        }
+    }
+
+    func chooseTextureFile() {
+        chooseFile(
+            title: "Choose OBJ Base-Color Texture",
+            message: "Choose the PNG or JPEG base-color texture for the selected OBJ.",
+            extensions: ["png", "jpg", "jpeg"],
+            choosingStatus: "Choose the base-color texture for the OBJ."
+        ) { [weak self] url in
+            self?.acceptTextureOverride(url: url)
+        }
+    }
+
+    func chooseCustomPaletteFile() {
+        chooseFile(
+            title: "Choose Filament Library",
+            message: "Choose a local JSON file describing custom filament colors.",
+            extensions: ["json"],
+            choosingStatus: "Choose a custom filament JSON library."
+        ) { [weak self] url in
+            self?.acceptCustomPalette(url: url)
+        }
+    }
+
+    private func chooseFile(
+        title: String,
+        message: String,
+        extensions: [String],
+        choosingStatus: String,
+        acceptSelection: @escaping @MainActor (URL) -> Void
+    ) {
+        let previousStatus = status
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.message = message
+        panel.prompt = "Open"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = extensions.compactMap { UTType(filenameExtension: $0) }
+        status = choosingStatus
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            Task { @MainActor in
+                guard let self else { return }
+                guard response == .OK, let url = panel.url else {
+                    if self.status == choosingStatus {
+                        self.status = previousStatus
+                    }
+                    return
+                }
+                acceptSelection(url)
+            }
         }
     }
 
@@ -255,11 +328,11 @@ final class StudioStore: ObservableObject {
 
     func convert() {
         guard let file = selectedFile else {
-            showingImporter = true
+            chooseSourceFile()
             return
         }
         if paletteSource == .custom && customPaletteURL == nil {
-            showingCustomPaletteImporter = true
+            chooseCustomPaletteFile()
             return
         }
         isWorking = true

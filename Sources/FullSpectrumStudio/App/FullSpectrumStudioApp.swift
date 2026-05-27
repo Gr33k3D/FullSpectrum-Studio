@@ -23,7 +23,7 @@ struct FullSpectrumStudioApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Open Painted 3MF or Textured OBJ/GLB...") {
-                    store.showingImporter = true
+                    store.chooseSourceFile()
                 }
                 .keyboardShortcut("o")
             }
