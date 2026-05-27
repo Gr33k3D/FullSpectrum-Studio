@@ -26,6 +26,13 @@ Heatmap and anchor-influence display assets share one reduced viewport geometry
 pass and differ only in material colors; large converted archives are not
 decompressed twice merely to draw two overlays.
 
+Since v0.4.1, opening a `.3mf` reads its palette and thumbnail before optional
+interactive work. Interactive and analysis viewport meshes are omitted above
+`750,000` triangles, leaving conversion/validation available without committing
+the application to a disproportionate display allocation. Background preview
+results are generation-scoped, so an older file cannot replace a newer
+selection when it finishes later.
+
 ## Components
 
 - `fullspectrum_engine.py`: conversion, codec, reference analysis and validation.

@@ -87,7 +87,8 @@ MAX_ARCHIVE_ENTRIES = 20000
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REFERENCE_BYTES = 600 * 1024 * 1024
 MAX_IMPORT_FACES = 2_000_000
-OUTPUT_VERSION = "v0.4"
+MAX_INTERACTIVE_PREVIEW_TRIANGLES = 750_000
+OUTPUT_VERSION = "v0.4.1"
 DEFAULT_QUALITY_BIAS = 60
 MIX_MODELS = ("perceptual", "optical-screen")
 HEX_DIGITS = "0123456789ABCDEF"
@@ -981,7 +982,7 @@ def project_mesh_metrics(archive):
     }
 
 def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_model="perceptual", texture_override=None,
-                    progress=lambda fraction,message: None):
+                    progress=lambda fraction,message: None, metadata_only=False):
     infile=Path(infile).expanduser().resolve()
     if infile.suffix.lower() in (".obj",".glb"):
         temporary=Path(tempfile.mkdtemp(prefix="fsinspectimport_"))
@@ -1008,7 +1009,6 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_mod
         colors=colors_from_project(obj)
         if not colors:
             raise RuntimeError("No filament_colour array found")
-        metrics=project_mesh_metrics(archive)
         preview=None
         candidates=[
             "Metadata/plate_1.png",
@@ -1021,8 +1021,15 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_mod
             preview=Path(thumbnail_dest).expanduser()
             preview.parent.mkdir(parents=True,exist_ok=True)
             preview.write_bytes(archive.read(preview_name))
+        metrics=None if metadata_only else project_mesh_metrics(archive)
         preview_mesh=None
-        if preview_mesh_dest:
+        preview_notice=None
+        if preview_mesh_dest and metrics and metrics["triangleCount"] > MAX_INTERACTIVE_PREVIEW_TRIANGLES:
+            preview_notice=(
+                f"Interactive preview skipped for {metrics['triangleCount']:,} triangles "
+                "to keep memory and loading time practical. Plate preview remains available."
+            )
+        elif preview_mesh_dest and not metadata_only:
             preview_mesh=export_preview_mesh(archive, preview_colors_from_project(obj,mix_model), preview_mesh_dest)
     return {
         "input":str(infile),
@@ -1031,6 +1038,7 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_mod
         "sourceColors":colors,
         "thumbnail":str(preview) if preview else None,
         "previewMesh":str(preview_mesh) if preview_mesh else None,
+        "previewNotice":preview_notice,
         "metrics":metrics,
     }
 
@@ -2023,7 +2031,15 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             analysis_root.mkdir(parents=True,exist_ok=True)
             heat_colors,influence_colors=analysis_preview_colors(newc,rows,real_count)
             with zipfile.ZipFile(outfile) as written:
-                heatmap=export_preview_mesh(written,heat_colors,analysis_root/"color-loss.obj","loss")
+                analysis_metrics=project_mesh_metrics(written)
+                if analysis_metrics["triangleCount"] > MAX_INTERACTIVE_PREVIEW_TRIANGLES:
+                    heatmap=None
+                    warnings.append(
+                        f"Analysis overlays skipped for {analysis_metrics['triangleCount']:,} triangles "
+                        "to keep memory and loading time practical."
+                    )
+                else:
+                    heatmap=export_preview_mesh(written,heat_colors,analysis_root/"color-loss.obj","loss")
             influence=(recolor_preview_mesh(heatmap,influence_colors,analysis_root/"anchor-influence.obj","loss")
                        if heatmap else None)
             analysis_assets={
@@ -2173,6 +2189,8 @@ def main():
     parser.add_argument("--json",action="store_true",dest="json_output")
     parser.add_argument("--no-reveal",action="store_true")
     parser.add_argument("--inspect",action="store_true")
+    parser.add_argument("--metadata-only",action="store_true",
+                        help="Read 3MF palette and thumbnail without mesh metrics or an interactive preview")
     parser.add_argument("--inventory",action="store_true")
     parser.add_argument("--thumbnail-out")
     parser.add_argument("--preview-mesh-out")
@@ -2186,9 +2204,11 @@ def main():
             if not infile or not infile.exists():
                 print("No file selected",file=sys.stderr); return 2
             if args.inspect:
+                if args.metadata_only and infile.suffix.lower() != ".3mf":
+                    raise RuntimeError("Fast metadata-only preview is available for 3MF sources only")
                 reporter=(lambda fraction,message: print(json.dumps({"progress":fraction,"message":message}),
                                                            file=sys.stderr,flush=True)) if args.json_output else (lambda fraction,message: None)
-                result=inspect_project(infile,args.thumbnail_out,args.preview_mesh_out,args.mix_model,args.texture,reporter)
+                result=inspect_project(infile,args.thumbnail_out,args.preview_mesh_out,args.mix_model,args.texture,reporter,args.metadata_only)
             else:
                 if args.mode:
                     mode=args.mode

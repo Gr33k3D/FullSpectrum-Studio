@@ -49,6 +49,19 @@ Two v0.4 stabilization changes were measured on the real workloads:
 | Compact texture sampling and streamed OBJ model XML, preview workload | `590.2 MB` peak | `309.1 MB` peak | `47.6%` lower peak resident memory |
 | Reuse geometry for heatmap and anchor-influence overlays, large conversion | `96.82 s`, `106.6 MB` | `62.64 s`, `91.7 MB` | `35.3%` less wall time and lower peak memory |
 
+### v0.4.1 Open-Path Guard
+
+A local painted `.3mf` containing `5,417,070` triangles exposed that optional
+viewer generation must not be part of opening a project. With v0.4.1:
+
+| Action | Outcome | Time | Peak resident memory |
+| --- | --- | ---: | ---: |
+| Fast metadata/palette open | Opens without constructing a 3D mesh | `0.06 s` | `25.9 MB` |
+| Bounded interactive-preview request | Reports that the optional mesh is omitted and preserves plate preview | `3.96 s` | `25.9 MB` |
+
+The same budget is applied to optional heatmap/anchor-influence mesh creation;
+conversion and `.3mf` validation still run when overlays are omitted.
+
 ## Viewer Notes
 
 The native viewer exposes `Fast`, `Balanced`, `High` and `Maximum` rendering

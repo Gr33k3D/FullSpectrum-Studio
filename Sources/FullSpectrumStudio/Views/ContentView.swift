@@ -157,8 +157,8 @@ private struct HeaderView: View {
             Spacer()
 
             StatusPill(
-                title: store.result == nil ? (store.isWorking ? "Processing" : "Ready") : "Validated",
-                icon: store.result == nil ? (store.isWorking ? "sparkles" : "circle.dotted") : "checkmark.seal.fill",
+                title: store.result == nil ? ((store.isWorking || store.isBuildingPreview) ? "Processing" : "Ready") : "Validated",
+                icon: store.result == nil ? ((store.isWorking || store.isBuildingPreview) ? "sparkles" : "circle.dotted") : "checkmark.seal.fill",
                 tint: store.result == nil ? .cyan : .green
             )
 

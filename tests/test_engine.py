@@ -280,6 +280,47 @@ class ConversionTests(unittest.TestCase):
                                            if not line.startswith("mtllib "))
             self.assertEqual(heat_geometry, influence_geometry)
 
+    def test_metadata_only_inspection_avoids_mesh_scan_and_preview_build(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            preview = Path(folder) / "preview.obj"
+            write_project(source)
+            inspected = ENGINE.inspect_project(source, preview_mesh_dest=preview, metadata_only=True)
+            self.assertIsNone(inspected["metrics"])
+            self.assertIsNone(inspected["previewMesh"])
+            self.assertFalse(preview.exists())
+
+    def test_large_interactive_preview_is_skipped_under_resource_budget(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            preview = Path(folder) / "preview.obj"
+            write_project(source)
+            previous_limit = ENGINE.MAX_INTERACTIVE_PREVIEW_TRIANGLES
+            try:
+                ENGINE.MAX_INTERACTIVE_PREVIEW_TRIANGLES = 0
+                inspected = ENGINE.inspect_project(source, preview_mesh_dest=preview)
+            finally:
+                ENGINE.MAX_INTERACTIVE_PREVIEW_TRIANGLES = previous_limit
+            self.assertIsNone(inspected["previewMesh"])
+            self.assertIn("Interactive preview skipped", inspected["previewNotice"])
+            self.assertFalse(preview.exists())
+
+    def test_large_analysis_overlays_are_optional_under_resource_budget(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            write_project(source)
+            previous_limit = ENGINE.MAX_INTERACTIVE_PREVIEW_TRIANGLES
+            try:
+                ENGINE.MAX_INTERACTIVE_PREVIEW_TRIANGLES = 0
+                output = ENGINE.convert(source, "official", "catalog", folder, False, "2",
+                                        analysis_dir=Path(folder) / "analysis")
+            finally:
+                ENGINE.MAX_INTERACTIVE_PREVIEW_TRIANGLES = previous_limit
+            self.assertIsNone(output["analysisAssets"]["heatmapMesh"])
+            self.assertIsNone(output["analysisAssets"]["anchorInfluenceMesh"])
+            self.assertTrue(any("Analysis overlays skipped" in warning for warning in output["warnings"]))
+            self.assertTrue(output["preservation"]["paintRemapVerified"])
+
     def test_reuses_equal_mix_recipe_instead_of_creating_duplicate_slots(self):
         anchors=[
             {"name":"Black","color":"#000000"},

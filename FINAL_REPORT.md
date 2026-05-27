@@ -1,10 +1,11 @@
-# FullSpectrum Studio v0.4 Final Report
+# FullSpectrum Studio v0.4 / v0.4.1 Final Report
 
 ## Release Decision
 
-Version `0.4.0-community-preview` is ready to publish as a careful community
-preview. It materially improves the safe painted-`.3mf` workflow while keeping
-experimental source import clearly labelled and bounded.
+Version `0.4.0-community-preview` established the improved conversion and
+validation workflow. Version `0.4.1-community-preview` is the release to use:
+it fixes a large-project loading regression while keeping experimental source
+import clearly labelled and bounded.
 
 FullSpectrum remains:
 
@@ -42,10 +43,13 @@ It is not positioned as a slicer or as a calibrated universal color mixer.
   `96.82 s` to `62.64 s` by reusing one preview geometry pass.
 - A very large raw GLB is rejected in `0.05 s` and about `25.5 MB` rather than
   loading an input beyond the supported face limit.
-- The automated suite contains `20` regression/security checks, including
+- A `5,417,070`-triangle painted `.3mf` now opens metadata/palette in `0.06 s`;
+  its optional interactive preview is declined in `3.96 s` at about `25.9 MB`
+  rather than entering a memory-heavy viewer build.
+- The automated suite contains `23` regression/security checks, including
   paint codec states, exact output remap validation, mixed-slot safety,
-  import behavior, deterministic schema output, unsafe archive rejection and
-  report privacy.
+  bounded preview/analysis behavior, import behavior, deterministic schema
+  output, unsafe archive rejection and report privacy.
 
 Full measured results are in [BENCHMARK.md](BENCHMARK.md).
 

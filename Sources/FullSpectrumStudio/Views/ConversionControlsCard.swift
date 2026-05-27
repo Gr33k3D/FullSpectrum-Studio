@@ -123,7 +123,7 @@ struct ConversionControlsCard: View {
                     .lineLimit(1)
             }
 
-            if store.isWorking || store.progress > 0 {
+            if store.isWorking || store.isBuildingPreview || store.progress > 0 {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack {
                         Text(store.progressMessage)
@@ -172,6 +172,10 @@ struct ConversionControlsCard: View {
                     Button("Cancel") { store.cancelConversion() }
                         .buttonStyle(StudioButtonStyle())
                         .help("Stop the active conversion")
+                } else if store.isBuildingPreview {
+                    Button("Stop Preview") { store.cancelPreview() }
+                        .buttonStyle(StudioButtonStyle())
+                        .help("Stop only the optional interactive preview build")
                 }
             }
 

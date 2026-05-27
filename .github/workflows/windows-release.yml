@@ -26,7 +26,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release
-          Compress-Archive -Path dist/FullSpectrumStudio/* -DestinationPath release/FullSpectrum-Studio-Windows-Portable-v0.4.0.zip -Force
+          Compress-Archive -Path dist/FullSpectrumStudio/* -DestinationPath release/FullSpectrum-Studio-Windows-Portable-v0.4.1.zip -Force
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Build installer

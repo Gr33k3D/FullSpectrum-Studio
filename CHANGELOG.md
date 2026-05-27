@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1 Community Preview - 2026-05-27
+
+### Fixed
+
+- Opens painted `.3mf` files through a fast metadata and thumbnail path before
+  optional interactive rendering work begins.
+- Skips automatic interactive/analysis mesh generation above `750,000`
+  triangles, preserving conversion and validation without an avoidable memory
+  spike.
+- Keeps modest textured OBJ/GLB sources visible while paint analysis runs in
+  the background.
+- Prevents cancelled or older source/output preview tasks from restoring the
+  previous model after a new selection.
+- Retains macOS read permission for the selected source and scopes optional
+  texture/reference/library access only to the work that needs it.
+
 ## 0.4.0 Community Preview - 2026-05-27
 
 ### Changed

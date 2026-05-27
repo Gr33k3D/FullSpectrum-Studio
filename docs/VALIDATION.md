@@ -25,9 +25,11 @@ swift build -c debug
 ./script/build_and_run.sh build
 ```
 
-The suite currently includes `20` synthetic regression and security tests,
+The suite currently includes `23` synthetic regression and security tests,
 including rejection of over-limit GLB import before geometry decoding and a
-shareable-report reference-filename privacy check.
+shareable-report reference-filename privacy check. It also tests lightweight
+metadata opening and automatic suppression of oversized optional preview and
+analysis meshes.
 
 ## Regression Samples
 

@@ -42,8 +42,13 @@ final class StudioStore: ObservableObject {
     private let service = ConverterService()
     private var inspectionID = UUID()
     private var inspectionTask: Task<Void, Never>?
+    private var previewTask: Task<Void, Never>?
     private var conversionID = UUID()
     private var conversionTask: Task<Void, Never>?
+    private var outputPreviewTask: Task<Void, Never>?
+    private var retainedSourceURL: URL?
+    private var retainedSourceAccess = false
+    private let immediateImportedPreviewByteLimit = 48 * 1024 * 1024
 
     init() {
         refreshInventory()
@@ -68,20 +73,25 @@ final class StudioStore: ObservableObject {
     }
 
     func accept(url: URL) {
-        if !["3mf", "obj", "glb"].contains(url.pathExtension.lowercased()) {
+        let extensionName = url.pathExtension.lowercased()
+        if !["3mf", "obj", "glb"].contains(extensionName) {
             acceptReference(url: url)
             return
         }
-        if selectedFile?.standardizedFileURL != url.standardizedFileURL || url.pathExtension.lowercased() != "obj" {
+        if selectedFile?.standardizedFileURL != url.standardizedFileURL || extensionName != "obj" {
             textureOverrideURL = nil
         }
         inspectionTask?.cancel()
+        previewTask?.cancel()
+        outputPreviewTask?.cancel()
         conversionID = UUID()
         conversionTask?.cancel()
+        retainSelectedSourceAccess(to: url)
         selectedFile = url
         lastProjectPath = url.path
         let currentInspectionID = UUID()
         inspectionID = currentInspectionID
+        inspection = nil
         result = nil
         previewImage = nil
         previewMeshURL = nil
@@ -93,22 +103,86 @@ final class StudioStore: ObservableObject {
         progress = 0
         progressMessage = "Reading model metadata."
         errorMessage = nil
-        status = ["obj", "glb"].contains(url.pathExtension.lowercased())
-            ? "Building experimental painted preview from textured source..."
+        status = ["obj", "glb"].contains(extensionName)
+            ? "Opening textured source and analyzing paint colors..."
             : "Reading project preview and material slots..."
-        isWorking = true
+        isWorking = false
         let previewURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("FullSpectrum-\(UUID().uuidString).png")
-        let previewMeshURL = FileManager.default.temporaryDirectory
+        let generatedMeshURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("FullSpectrum-\(UUID().uuidString).obj")
+        let capturedTextureOverride = textureOverrideURL
 
-        inspectionTask = Task {
+        if extensionName == "3mf" {
+            inspectionTask = Task {
+                do {
+                    let project = try await service.metadata(file: url, thumbnailURL: previewURL)
+                    guard inspectionID == currentInspectionID else { return }
+                    inspection = project
+                    previewImage = project.thumbnail.flatMap { NSImage(contentsOfFile: $0) }
+                    status = "\(project.sourceSlots) source filaments loaded. Preparing an efficient 3D preview..."
+                    buildInteractivePreview(
+                        for: url,
+                        outputURL: generatedMeshURL,
+                        inspectionID: currentInspectionID,
+                        textureOverride: nil,
+                        keepExistingMesh: false
+                    )
+                } catch is CancellationError {
+                    return
+                } catch {
+                    guard inspectionID == currentInspectionID else { return }
+                    errorMessage = error.localizedDescription
+                    status = "Could not open that project."
+                    isBuildingPreview = false
+                }
+                if inspectionID == currentInspectionID {
+                    inspectionTask = nil
+                }
+            }
+            return
+        }
+
+        if canDisplayImportedSourceImmediately(url) {
+            previewMeshURL = url
+            status = "Source geometry opened. Sampling texture colors in the background..."
+        } else {
+            status = "Large textured source selected. Building a bounded preview in the background..."
+        }
+        buildInteractivePreview(
+            for: url,
+            outputURL: generatedMeshURL,
+            inspectionID: currentInspectionID,
+            textureOverride: capturedTextureOverride,
+            keepExistingMesh: previewMeshURL != nil
+        )
+    }
+
+    private func canDisplayImportedSourceImmediately(_ url: URL) -> Bool {
+        guard let bytes = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
+            return false
+        }
+        return bytes <= immediateImportedPreviewByteLimit
+    }
+
+    private func buildInteractivePreview(
+        for url: URL,
+        outputURL: URL,
+        inspectionID currentInspectionID: UUID,
+        textureOverride: URL?,
+        keepExistingMesh: Bool
+    ) {
+        previewTask?.cancel()
+        isBuildingPreview = true
+        previewTask = Task {
+            let temporaryAccess = beginTemporaryAccess(to: [textureOverride])
+            defer { endTemporaryAccess(temporaryAccess) }
             do {
-                let project = try await service.inspect(
+                let project = try await service.previewMesh(
                     file: url,
-                    thumbnailURL: previewURL,
-                    previewMeshURL: previewMeshURL,
-                    textureOverride: textureOverrideURL,
+                    outputURL: outputURL,
+                    mixPrediction: mixPrediction,
+                    textureOverride: textureOverride,
                     progress: { [weak self] value, message in
                         Task { @MainActor in
                             guard self?.inspectionID == currentInspectionID else { return }
@@ -119,13 +193,19 @@ final class StudioStore: ObservableObject {
                 )
                 guard inspectionID == currentInspectionID else { return }
                 inspection = project
-                previewImage = project.thumbnail.flatMap { NSImage(contentsOfFile: $0) }
-                self.previewMeshURL = project.previewMesh.map(URL.init(fileURLWithPath:))
+                if let thumbnail = project.thumbnail {
+                    previewImage = NSImage(contentsOfFile: thumbnail)
+                }
+                if let mesh = project.previewMesh {
+                    previewMeshURL = URL(fileURLWithPath: mesh)
+                } else if !keepExistingMesh {
+                    previewMeshURL = nil
+                }
                 if let recommendation = project.metrics?.recommendedRenderMode,
                    let mode = ViewerPerformance(rawValue: recommendation) {
                     viewerPerformance = mode
                 }
-                status = "\(project.sourceSlots) source filaments ready for conversion."
+                status = project.previewNotice ?? "\(project.sourceSlots) source filaments ready for conversion."
             } catch is CancellationError {
                 return
             } catch {
@@ -134,8 +214,10 @@ final class StudioStore: ObservableObject {
                 status = "Could not open that project."
             }
             if inspectionID == currentInspectionID {
-                isWorking = false
                 isBuildingPreview = false
+                progress = 0
+                progressMessage = "Ready for conversion."
+                previewTask = nil
             }
         }
     }
@@ -186,24 +268,34 @@ final class StudioStore: ObservableObject {
         progressMessage = "Starting conversion."
         status = "Converting painted facets and validating the output..."
         inspectionTask?.cancel()
+        previewTask?.cancel()
+        outputPreviewTask?.cancel()
+        isBuildingPreview = false
         conversionTask?.cancel()
         let currentConversionID = UUID()
         conversionID = currentConversionID
+        let capturedReference = referenceURL
+        let capturedPalette = customPaletteURL
+        let capturedTexture = textureOverrideURL
+        let capturedPrediction = mixPrediction
         conversionTask = Task {
+            let temporaryAccess = beginTemporaryAccess(to: [capturedReference, capturedPalette, capturedTexture])
+            defer { endTemporaryAccess(temporaryAccess) }
             do {
                 let converted = try await service.convert(
                     file: file,
                     mode: mode,
                     paletteSource: paletteSource,
                     realSlots: realSlots,
-                    reference: referenceURL,
-                    customPalette: customPaletteURL,
-                    textureOverride: textureOverrideURL,
+                    reference: capturedReference,
+                    customPalette: capturedPalette,
+                    textureOverride: capturedTexture,
                     qualityBias: Int(qualityBias),
-                    mixPrediction: mixPrediction,
+                    mixPrediction: capturedPrediction,
                     outputDirectory: file.deletingLastPathComponent(),
                     progress: { [weak self] value, message in
                         Task { @MainActor in
+                            guard self?.conversionID == currentConversionID else { return }
                             self?.progress = value
                             self?.progressMessage = message
                         }
@@ -217,7 +309,7 @@ final class StudioStore: ObservableObject {
                 progress = 1
                 progressMessage = "Validated output is ready."
                 status = "Validated: \(converted.realSlots) physical and \(converted.outputSlots - converted.realSlots) mixed slots."
-                buildOutputPreview(for: converted.output)
+                buildOutputPreview(for: converted.output, conversionID: currentConversionID, mixPrediction: capturedPrediction)
                 if autoOpenValidatedOutput {
                     openOutput()
                 }
@@ -240,9 +332,14 @@ final class StudioStore: ObservableObject {
 
     func cancelConversion() {
         inspectionTask?.cancel()
+        previewTask?.cancel()
+        outputPreviewTask?.cancel()
+        inspectionID = UUID()
         conversionID = UUID()
         conversionTask?.cancel()
         inspectionTask = nil
+        previewTask = nil
+        outputPreviewTask = nil
         conversionTask = nil
         isWorking = false
         isBuildingPreview = false
@@ -250,10 +347,23 @@ final class StudioStore: ObservableObject {
         progressMessage = "Cancelled."
     }
 
-    private func buildOutputPreview(for path: String) {
+    func cancelPreview() {
+        inspectionTask?.cancel()
+        previewTask?.cancel()
+        inspectionID = UUID()
+        inspectionTask = nil
+        previewTask = nil
+        isBuildingPreview = false
+        progress = 0
+        progressMessage = "Preview stopped."
+        status = inspection == nil ? "Preview stopped. Choose a source to try again." : "Ready for conversion. Interactive preview stopped."
+    }
+
+    private func buildOutputPreview(for path: String, conversionID currentConversionID: UUID, mixPrediction: MixPrediction) {
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("FullSpectrum-Predicted-\(UUID().uuidString).obj")
-        Task {
+        outputPreviewTask?.cancel()
+        outputPreviewTask = Task {
             do {
                 let project = try await service.previewMesh(
                     file: URL(fileURLWithPath: path),
@@ -261,11 +371,44 @@ final class StudioStore: ObservableObject {
                     mixPrediction: mixPrediction,
                     textureOverride: textureOverrideURL
                 )
+                guard conversionID == currentConversionID, result?.output == path else { return }
                 outputPreviewMeshURL = project.previewMesh.map(URL.init(fileURLWithPath:))
             } catch {
+                guard conversionID == currentConversionID, result?.output == path else { return }
                 outputPreviewMeshURL = nil
             }
+            if conversionID == currentConversionID {
+                outputPreviewTask = nil
+            }
         }
+    }
+
+    private func retainSelectedSourceAccess(to url: URL) {
+        if retainedSourceAccess, let retainedSourceURL {
+            retainedSourceURL.stopAccessingSecurityScopedResource()
+        }
+        retainedSourceURL = url
+        retainedSourceAccess = url.startAccessingSecurityScopedResource()
+    }
+
+    private func beginTemporaryAccess(to urls: [URL?]) -> [URL] {
+        var opened: [URL] = []
+        var visited = Set<String>()
+        for url in urls.compactMap({ $0 }) {
+            let path = url.standardizedFileURL.path
+            guard visited.insert(path).inserted,
+                  retainedSourceURL?.standardizedFileURL.path != path else {
+                continue
+            }
+            if url.startAccessingSecurityScopedResource() {
+                opened.append(url)
+            }
+        }
+        return opened
+    }
+
+    private func endTemporaryAccess(_ urls: [URL]) {
+        urls.forEach { $0.stopAccessingSecurityScopedResource() }
     }
 
     func revealOutput() {

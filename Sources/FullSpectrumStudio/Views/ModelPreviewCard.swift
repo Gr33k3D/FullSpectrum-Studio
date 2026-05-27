@@ -98,6 +98,17 @@ struct ModelPreviewCard: View {
                         }
                 } else {
                     EmptyDropPrompt(isTargeted: isTargeted)
+                        .overlay(alignment: .bottom) {
+                            if store.isBuildingPreview {
+                                Label(store.progressMessage, systemImage: "hourglass")
+                                    .font(.caption)
+                                    .foregroundStyle(.cyan.opacity(0.9))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(.black.opacity(0.42), in: Capsule())
+                                    .padding(12)
+                            }
+                        }
                 }
 
                 if let project = store.inspection {
@@ -143,6 +154,12 @@ struct ModelPreviewCard: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.48))
             }
+            if let notice = store.inspection?.previewNotice {
+                Label(notice, systemImage: "memorychip")
+                    .font(.caption)
+                    .foregroundStyle(.orange.opacity(0.82))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let reference = store.referenceURL {
                 Label("Visual target: \(reference.lastPathComponent)", systemImage: "scope")
                     .font(.caption)
@@ -166,8 +183,10 @@ struct ModelPreviewCard: View {
         }
         .padding(17)
         .background(CardSurface())
-        .onChange(of: store.result?.output) { _, _ in
-            store.previewMode = .predicted
+        .onChange(of: store.result?.output) { _, newOutput in
+            if newOutput != nil {
+                store.previewMode = .predicted
+            }
         }
     }
 

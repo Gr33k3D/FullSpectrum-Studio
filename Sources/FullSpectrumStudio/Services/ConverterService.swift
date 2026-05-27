@@ -50,30 +50,28 @@ struct ConverterService {
         )
     }
 
-    func inspect(
+    func metadata(
         file: URL,
-        thumbnailURL: URL,
-        previewMeshURL: URL,
-        textureOverride: URL? = nil,
-        progress: @escaping @Sendable (Double, String) -> Void
+        thumbnailURL: URL
     ) async throws -> ProjectInspection {
-        var arguments = [
+        try await execute(
+            arguments: [
                 "--inspect", "--json",
+                "--metadata-only",
                 "--thumbnail-out", thumbnailURL.path,
-                "--preview-mesh-out", previewMeshURL.path,
                 file.path
-            ]
-        if let textureOverride {
-            arguments.insert(contentsOf: ["--texture", textureOverride.path], at: arguments.count - 1)
-        }
-        return try await execute(
-            arguments: arguments,
-            type: ProjectInspection.self,
-            progress: progress
+            ],
+            type: ProjectInspection.self
         )
     }
 
-    func previewMesh(file: URL, outputURL: URL, mixPrediction: MixPrediction = .perceptual, textureOverride: URL? = nil) async throws -> ProjectInspection {
+    func previewMesh(
+        file: URL,
+        outputURL: URL,
+        mixPrediction: MixPrediction = .perceptual,
+        textureOverride: URL? = nil,
+        progress: (@Sendable (Double, String) -> Void)? = nil
+    ) async throws -> ProjectInspection {
         var arguments = [
                 "--inspect", "--json",
                 "--preview-mesh-out", outputURL.path,
@@ -85,7 +83,8 @@ struct ConverterService {
         }
         return try await execute(
             arguments: arguments,
-            type: ProjectInspection.self
+            type: ProjectInspection.self,
+            progress: progress
         )
     }
 

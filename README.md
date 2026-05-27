@@ -10,6 +10,8 @@ The source project is never modified.
 This is an independent community preview built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
+Latest reliability update: [v0.4.1 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.1-community-preview).
+
 ## What It Does
 
 - Reads Bambu serialized `paint_color` states from the model itself instead of
@@ -25,6 +27,9 @@ workflow and is not affiliated with Bambu Lab.
   experimentally as new painted projects, routed through the same validator.
 - Provides movable original, reduced/predicted, heatmap, anchor-influence and
   wireframe previews on macOS.
+- Opens large painted projects through a quick thumbnail/palette pass and
+  omits optional 3D overlays above a practical triangle budget rather than
+  forcing a slow, memory-heavy viewer build.
 
 ## Preview
 
@@ -32,6 +37,9 @@ workflow and is not affiliated with Bambu Lab.
 
 Preview estimates from a validated local test project; this is not a calibrated
 printed-color measurement.
+
+The displayed analysis image was produced with v0.4; v0.4.1 preserves that
+workflow and adds the large-file loading guard.
 
 ## Validation
 
@@ -97,6 +105,8 @@ candidate:
 - Images by themselves do not contain printable geometry.
 - Imports over two million faces are rejected; very large raw GLBs remain
   useful as references to an already practical painted `.3mf`.
+- Automatic interactive and analysis previews are omitted above `750,000`
+  triangles; conversion and validation remain available.
 
 ## Printability Reporting
 
@@ -177,6 +187,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Validation And Testing](docs/VALIDATION.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
+- [0.4.1 Reliability Notes](docs/RELEASE_NOTES_0.4.1.md)
 
 ## License
 

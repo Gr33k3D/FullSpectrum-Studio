@@ -123,6 +123,7 @@ struct ProjectInspection: Decodable {
     let sourceColors: [String]
     let thumbnail: String?
     let previewMesh: String?
+    let previewNotice: String?
     let metrics: MeshMetrics?
     let `import`: ImportSummary?
 }
