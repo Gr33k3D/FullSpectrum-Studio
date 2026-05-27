@@ -52,6 +52,36 @@ struct ConversionControlsCard: View {
             }
             .foregroundStyle(.white.opacity(0.7))
 
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Quality vs waste")
+                    Spacer()
+                    Text("\(Int(store.qualityBias))")
+                        .monospacedDigit()
+                }
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.7))
+                Slider(value: $store.qualityBias, in: 0...100, step: 5) {
+                    Text("Quality versus waste")
+                }
+                .tint(.cyan)
+                Text(store.qualityBias < 40 ? "Practical: requires stronger visual gains before creating mixes." :
+                        store.qualityBias > 75 ? "Detail: permits more logical mixes and three-color candidates." :
+                        "Balanced: suppresses weak mixes while keeping visible improvements.")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.48))
+            }
+
+            Picker("Mix prediction", selection: $store.mixPrediction) {
+                ForEach(MixPrediction.allCases) { prediction in
+                    Text(prediction.title).tag(prediction)
+                }
+            }
+            .pickerStyle(.menu)
+            Text(store.mixPrediction.explanation)
+                .font(.caption2)
+                .foregroundStyle(store.mixPrediction == .perceptual ? .white.opacity(0.48) : .orange.opacity(0.84))
+
             HStack(spacing: 10) {
                 Button(store.referenceURL == nil ? "Add Reference" : "Change Reference") {
                     store.showingReferenceImporter = true
@@ -68,10 +98,26 @@ struct ConversionControlsCard: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.cyan)
                 }
+                if store.selectedFile?.pathExtension.lowercased() == "obj" {
+                    Button(store.textureOverrideURL == nil ? "Add OBJ Texture" : "Change OBJ Texture") {
+                        store.showingTextureImporter = true
+                    }
+                    .font(.caption.weight(.medium))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.cyan)
+                    .help("Choose the PNG/JPEG base-color texture when the OBJ has no material link")
+                }
                 Spacer()
             }
             if let reference = store.referenceURL {
                 Text("Reference: \(reference.lastPathComponent)")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.52))
+                    .lineLimit(1)
+            }
+            if let texture = store.textureOverrideURL,
+               store.selectedFile?.pathExtension.lowercased() == "obj" {
+                Text("OBJ color texture: \(texture.lastPathComponent)")
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.52))
                     .lineLimit(1)
@@ -117,11 +163,15 @@ struct ConversionControlsCard: View {
                     Button {
                         store.revealOutput()
                     } label: {
-                        Image(systemName: "folder")
-                            .frame(width: 18)
+                        Label("Show Output", systemImage: "folder")
                     }
                     .buttonStyle(StudioButtonStyle())
-                    .help("Reveal validated output")
+                    .help("Reveal the validated output in Finder")
+                }
+                if store.isWorking {
+                    Button("Cancel") { store.cancelConversion() }
+                        .buttonStyle(StudioButtonStyle())
+                        .help("Stop the active conversion")
                 }
             }
 
@@ -134,6 +184,10 @@ struct ConversionControlsCard: View {
                     .lineLimit(2)
                 Spacer()
             }
+            Toggle("Restore last local session", isOn: $store.restoreLastSession)
+                .toggleStyle(.switch)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.52))
         }
         .padding(17)
         .background(CardSurface())

@@ -2,18 +2,29 @@
 
 ## Pipeline
 
-1. The desktop app selects a painted Bambu `.3mf` and optional reference.
+1. The desktop app selects a painted Bambu `.3mf`, or experimentally a
+   constrained textured `.obj`/`.glb`, plus an optional visual reference.
 2. The Python engine safely extracts the ZIP container and reads
    `Metadata/project_settings.config` plus every `3D/Objects/*.model`.
 3. `paint_color` facet states are decoded as Bambu TriangleSelector serialized
    states. Embedded slot numbers are remapped to the selected reduced palette.
-4. Physical slots are selected from the requested filament source. Mixed slots
-   are generated only from physical slots and are appended after them.
-5. Project filament arrays and purge matrices are resized through their
+4. CIEDE2000-weighted anchor selection uses painted usage and, when supplied,
+   a modest texture-reference contribution. Physical slots are selected from
+   the requested filament source.
+5. Mixed slots are generated only from physical slots, only when predicted
+   visual gain clears the selected quality-versus-waste threshold, and are
+   reused when two paint targets share the same printable recipe.
+6. Project filament arrays and purge matrices are resized through their
    detected slot/matrix layout.
-6. The output archive is written separately, reopened, structurally validated,
-   and compared to preservation hashes from the source.
-7. Recipes, estimated quality and a human-readable report are returned to the UI.
+7. The output archive is written separately, reopened, structurally validated,
+   compared to preservation hashes, and checked against the exact expected
+   decoded paint remap.
+8. Recipes, confidence/contrast/complexity estimates and optional analysis
+   meshes are returned to the UI.
+
+Heatmap and anchor-influence display assets share one reduced viewport geometry
+pass and differ only in material colors; large converted archives are not
+decompressed twice merely to draw two overlays.
 
 ## Components
 
@@ -21,6 +32,8 @@
 - `Sources/FullSpectrumStudio`: native macOS SwiftUI shell and SceneKit preview.
 - `desktop/full_spectrum_studio.py`: Windows/cross-platform desktop shell for the same engine.
 - `tests/test_engine.py`: regression and security tests using synthetic projects only.
+- `tools/benchmark_quality.py`: private-local comparison of practical,
+  balanced and detail planning settings.
 
 ## Paint Mapping
 
@@ -33,6 +46,15 @@ No first-use lookup or formula guess is used.
 ## Reference Inputs
 
 GLB reference handling reads the glTF header and embedded texture buffer view
-under size limits. OBJ mode resolves a referenced material texture when
-present. Texture sampling is local and produces only dominant-color summaries
-and an estimated score. Printable geometry continues to come from the `.3mf`.
+under size limits. Reference-only OBJ resolves its material texture. Texture
+sampling is local and produces only dominant-color summaries and an estimated
+score.
+
+Experimental OBJ import parses triangle geometry and complete UV references,
+samples its linked or explicitly selected PNG/JPEG base-color texture, clusters colors deterministically, embeds the
+texture and UV mapping in an intermediate painted 3MF, and then invokes the
+normal validated converter. Experimental GLB import applies node transforms and
+accepts only uncompressed triangle primitives with positions, UVs and one
+embedded texture. Both warn when extended analysis colors must be compressed to
+the Bambu paint-slot limit; unsupported GLB material/compression cases fail
+explicitly, as do imports above the two-million-face safety limit.

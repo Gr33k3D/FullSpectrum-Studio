@@ -4,13 +4,20 @@ struct ModelPreviewCard: View {
     @EnvironmentObject private var store: StudioStore
     @State private var isTargeted = false
     @State private var cameraResetToken = 0
-    @State private var showingPredicted = false
 
     private var activeMeshURL: URL? {
-        if showingPredicted, let predicted = store.outputPreviewMeshURL {
-            return predicted
+        switch store.previewMode {
+        case .predicted:
+            return store.outputPreviewMeshURL ?? store.previewMeshURL
+        case .colorLoss:
+            return store.heatmapMeshURL ?? store.outputPreviewMeshURL ?? store.previewMeshURL
+        case .anchorInfluence:
+            return store.anchorInfluenceMeshURL ?? store.outputPreviewMeshURL ?? store.previewMeshURL
+        case .wireframe:
+            return store.outputPreviewMeshURL ?? store.previewMeshURL
+        case .original:
+            return store.previewMeshURL
         }
-        return store.previewMeshURL
     }
 
     var body: some View {
@@ -26,13 +33,14 @@ struct ModelPreviewCard: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.cyan.opacity(0.88))
                 }
-                if store.outputPreviewMeshURL != nil {
-                    Picker("Preview", selection: $showingPredicted) {
-                        Text("Original").tag(false)
-                        Text("Predicted").tag(true)
+                if store.result != nil {
+                    Picker("Preview", selection: $store.previewMode) {
+                        ForEach(PreviewMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
                     }
-                    .pickerStyle(.segmented)
-                    .frame(width: 178)
+                    .pickerStyle(.menu)
+                    .frame(width: 160)
                 }
             }
 
@@ -45,7 +53,12 @@ struct ModelPreviewCard: View {
                     }
 
                 if let meshURL = activeMeshURL {
-                    InteractiveModelView(meshURL: meshURL, resetToken: cameraResetToken)
+                    InteractiveModelView(
+                        meshURL: meshURL,
+                        resetToken: cameraResetToken,
+                        wireframe: store.previewMode == .wireframe,
+                        performance: store.viewerPerformance
+                    )
                         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .overlay(alignment: .topTrailing) {
                             HStack(spacing: 8) {
@@ -97,7 +110,7 @@ struct ModelPreviewCard: View {
                                     .foregroundStyle(.white.opacity(0.9))
                                     .lineLimit(1)
                                 Text(store.previewMeshURL == nil ? "Bambu 3MF plate render" :
-                                        (showingPredicted ? "Predicted reduced-palette preview" : "Original painted mesh preview"))
+                                        previewCaption)
                                     .font(.caption)
                                     .foregroundStyle(.white.opacity(0.5))
                             }
@@ -112,7 +125,7 @@ struct ModelPreviewCard: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 475)
+            .frame(minHeight: 350, idealHeight: 470, maxHeight: .infinity)
             .dropDestination(for: URL.self) { urls, _ in
                 guard let url = urls.first else { return false }
                 store.accept(url: url)
@@ -136,11 +149,38 @@ struct ModelPreviewCard: View {
                     .foregroundStyle(.cyan.opacity(0.72))
                     .lineLimit(1)
             }
+            HStack(spacing: 12) {
+                Picker("Render", selection: $store.viewerPerformance) {
+                    ForEach(ViewerPerformance.allCases) { option in Text(option.rawValue).tag(option) }
+                }
+                .pickerStyle(.menu)
+                if let metrics = store.inspection?.metrics {
+                    Spacer()
+                    Text("\(metrics.triangleCount.formatted()) polygons | \(metrics.vertexCount.formatted()) vertices | \(ByteCountFormatter.string(fromByteCount: Int64(metrics.previewMemoryEstimateBytes), countStyle: .memory)) preview memory | ~\(String(format: "%.1f", metrics.previewBuildEstimateSeconds))s build")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.46))
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.64))
         }
         .padding(17)
         .background(CardSurface())
         .onChange(of: store.result?.output) { _, _ in
-            showingPredicted = false
+            store.previewMode = .predicted
+        }
+    }
+
+    private var previewCaption: String {
+        switch store.previewMode {
+        case .original:
+            return store.inspection?.`import` == nil
+                ? "Original painted mesh preview"
+                : "Imported painted approximation of source texture"
+        case .predicted: return "Reduced palette with predicted mixed colors"
+        case .colorLoss: return "Estimated color-loss heatmap: green low, red high"
+        case .anchorInfluence: return "Dominant physical anchor influence"
+        case .wireframe: return "Predicted palette wireframe"
         }
     }
 }
@@ -153,10 +193,10 @@ private struct EmptyDropPrompt: View {
             Image(systemName: isTargeted ? "square.and.arrow.down.fill" : "cube.transparent")
                 .font(.system(size: 45, weight: .light))
                 .foregroundStyle(isTargeted ? .cyan : .white.opacity(0.38))
-            Text(isTargeted ? "Release to load file" : "Drop a Bambu .3mf here")
+            Text(isTargeted ? "Release to load file" : "Drop a painted .3mf, textured .obj or .glb here")
                 .font(.title3.weight(.medium))
                 .foregroundStyle(.white.opacity(0.85))
-            Text("You can also add an OBJ, GLB or texture reference")
+            Text("Images can also be added as visual references")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.45))
         }

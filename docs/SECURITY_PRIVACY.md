@@ -17,6 +17,11 @@ written to recipe or validation reports.
 - Uncompressed archive and embedded-reference size limits are enforced.
 - GLB embedded images are extracted only to temporary local storage and removed
   after analysis.
+- Packaged macOS executables are stripped of local build-path/debug symbols
+  before a release archive is made.
+- Experimental OBJ/GLB import embeds only the selected model texture in its local
+  output project. Users should confirm that texture artwork is appropriate to
+  share before publishing generated files.
 
 ## Sharing Results
 

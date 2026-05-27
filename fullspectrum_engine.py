@@ -23,7 +23,7 @@ import xml.etree.ElementTree as ET
 from array import array
 from pathlib import Path
 from itertools import combinations
-from collections import Counter
+from collections import Counter, defaultdict
 
 BAMBU_PLA = [
     ("PLA Matte Ivory White", "#FFFFFF"),
@@ -69,7 +69,10 @@ CMYK_TARGETS = [
     ("White", "#FFFFFF"),
     ("Warm White", "#F5F0E8"),
 ]
-R2 = [(round(i/20, 4), round(1-i/20, 4)) for i in range(1,20)]
+# Layer-mixed colors must translate into repeatable cadence patterns. These
+# ratios are intentionally small rational schedules rather than arbitrary
+# five-percent steps that suggest precision the uncalibrated model cannot offer.
+R2 = [(0.25,0.75), (1/3,2/3), (0.5,0.5), (2/3,1/3), (0.75,0.25)]
 R3 = [(.6,.2,.2),(.2,.6,.2),(.2,.2,.6),(.5,.3,.2),(.5,.2,.3),(.3,.5,.2),(.2,.5,.3),(.3,.2,.5),(.2,.3,.5),(.4,.4,.2),(.4,.2,.4),(.2,.4,.4),(1/3,1/3,1/3)]
 
 MIN_ANCHOR_DE = 7.0
@@ -83,6 +86,10 @@ MAX_REAL_SLOTS = 6
 MAX_ARCHIVE_ENTRIES = 20000
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REFERENCE_BYTES = 600 * 1024 * 1024
+MAX_IMPORT_FACES = 2_000_000
+OUTPUT_VERSION = "v0.4"
+DEFAULT_QUALITY_BIAS = 60
+MIX_MODELS = ("perceptual", "optical-screen")
 HEX_DIGITS = "0123456789ABCDEF"
 PAINT_PATTERN = re.compile(r'paint_color="([^"]+)"')
 PAINT_BYTES_PATTERN = re.compile(br'paint_color="[^"]+"')
@@ -138,14 +145,53 @@ def lab_to_rgb(L,a,b):
         out=12.92*channel if channel<=0.0031308 else 1.055*(channel**(1/2.4))-0.055
         return out*255
     return encode(rl),encode(gl),encode(bl)
+def delta_e_2000(lab1, lab2):
+    """CIEDE2000 perceptual difference, using the standard graphic-arts weights."""
+    L1,a1,b1=lab1; L2,a2,b2=lab2
+    c1=math.hypot(a1,b1); c2=math.hypot(a2,b2)
+    c_bar=(c1+c2)/2
+    g=0.5*(1-math.sqrt((c_bar**7)/(c_bar**7+25**7))) if c_bar else 0.5
+    ap1=(1+g)*a1; ap2=(1+g)*a2
+    cp1=math.hypot(ap1,b1); cp2=math.hypot(ap2,b2)
+    hp1=(math.degrees(math.atan2(b1,ap1))+360)%360 if cp1 else 0
+    hp2=(math.degrees(math.atan2(b2,ap2))+360)%360 if cp2 else 0
+    dL=L2-L1
+    dC=cp2-cp1
+    if cp1*cp2 == 0:
+        dh=0
+    elif abs(hp2-hp1)<=180:
+        dh=hp2-hp1
+    elif hp2<=hp1:
+        dh=hp2-hp1+360
+    else:
+        dh=hp2-hp1-360
+    dH=2*math.sqrt(cp1*cp2)*math.sin(math.radians(dh/2))
+    lp=(L1+L2)/2
+    cp=(cp1+cp2)/2
+    if cp1*cp2 == 0:
+        hp=hp1+hp2
+    elif abs(hp1-hp2)<=180:
+        hp=(hp1+hp2)/2
+    elif hp1+hp2<360:
+        hp=(hp1+hp2+360)/2
+    else:
+        hp=(hp1+hp2-360)/2
+    t=(1 - 0.17*math.cos(math.radians(hp-30))
+       + 0.24*math.cos(math.radians(2*hp))
+       + 0.32*math.cos(math.radians(3*hp+6))
+       - 0.20*math.cos(math.radians(4*hp-63)))
+    sl=1+(0.015*(lp-50)**2)/math.sqrt(20+(lp-50)**2)
+    sc=1+0.045*cp
+    sh=1+0.015*cp*t
+    rt=-2*math.sqrt((cp**7)/(cp**7+25**7))*math.sin(
+        math.radians(60*math.exp(-((hp-275)/25)**2))
+    ) if cp else 0
+    return math.sqrt((dL/sl)**2+(dC/sc)**2+(dH/sh)**2+rt*(dC/sc)*(dH/sh))
 def dist(a,b):
-    L1,a1,b1=rgb_to_lab(*rgb(a)); L2,a2,b2=rgb_to_lab(*rgb(b))
-    return math.sqrt((L1-L2)**2+(a1-a2)**2+(b1-b2)**2)
+    return delta_e_2000(rgb_to_lab(*rgb(a)), rgb_to_lab(*rgb(b)))
 def luminance(h):
     r,g,b=rgb(h); return .2126*r+.7152*g+.0722*b
-def mix(hexes, ratios):
-    # A perceptual preview estimate. Real layered filament appearance still
-    # depends on material, surface and printer calibration.
+def perceptual_mix(hexes, ratios):
     l_acc=a_acc=b_acc=0.0
     for h,w in zip(hexes,ratios):
         lightness,a_value,b_value=rgb_to_lab(*rgb(h))
@@ -153,6 +199,21 @@ def mix(hexes, ratios):
         a_acc+=a_value*w
         b_acc+=b_value*w
     return tohex(*lab_to_rgb(l_acc,a_acc,b_acc))
+def optical_screen_mix(hexes, ratios, n=1.7):
+    """
+    An uncalibrated Yule-Nielsen-style screen estimate for alternating color
+    exposure. It is a planning preview only, not borrowed filament calibration.
+    """
+    channels=[]
+    for channel in range(3):
+        reflectance=sum(weight*((rgb(color)[channel]/255.0)**(1/n))
+                        for color,weight in zip(hexes,ratios))**n
+        channels.append(reflectance*255.0)
+    return tohex(*channels)
+def mix(hexes, ratios, model="perceptual"):
+    # Physical appearance still depends on material, layer height, surface and
+    # printer calibration; neither bundled estimate represents measured stock.
+    return optical_screen_mix(hexes,ratios) if model=="optical-screen" else perceptual_mix(hexes,ratios)
 
 def choose_file():
     try:
@@ -256,7 +317,7 @@ def colors_from_project(obj):
                 out.append(hx(x).upper())
     return out
 
-def preview_colors_from_project(obj):
+def preview_colors_from_project(obj, mix_model="perceptual"):
     colors=colors_from_project(obj)
     mixed=obj.get("filament_is_mixed",[])
     components=obj.get("filament_mixed_components",[])
@@ -268,7 +329,7 @@ def preview_colors_from_project(obj):
             slots=[int(value) for value in components[index].split(",") if value.strip()]
             weights=[float(value) for value in ratios[index].split(",") if value.strip()]
             if len(slots)==len(weights) and slots and all(1<=slot<=len(colors) for slot in slots):
-                colors[index]=mix([colors[slot-1] for slot in slots],weights)
+                colors[index]=mix([colors[slot-1] for slot in slots],weights,mix_model)
         except ValueError:
             continue
     return colors
@@ -475,7 +536,7 @@ def sample_reference_colors(image, destination):
         bmp=destination/"reference_sample.bmp"
         if not Path("/usr/bin/sips").exists():
             return []
-        result=subprocess.run(["/usr/bin/sips","-s","format","bmp",str(image),"--out",str(bmp)],
+        result=subprocess.run(["/usr/bin/sips","-Z","512","-s","format","bmp",str(image),"--out",str(bmp)],
                               capture_output=True,text=True)
         if result.returncode or not bmp.exists():
             return []
@@ -486,7 +547,6 @@ def sample_reference_colors(image, destination):
         bits=struct.unpack_from("<H",data,28)[0]
         if bits not in (24,32) or width<=0 or height<=0:
             return []
-        width=min(width,512); height=min(height,512)
         stride=((width*(bits//8)+3)//4)*4
         step=max(1,min(width,height)//96)
         pixels=[]
@@ -499,6 +559,374 @@ def sample_reference_colors(image, destination):
     total=sum(counts.values()) or 1
     return [{"color":tohex(red*32+16,green*32+16,blue*32+16),"weight":round(count/total,4)}
             for (red,green,blue),count in counts.most_common(8)]
+
+def load_image_pixels(image, destination):
+    if image.stat().st_size > MAX_REFERENCE_BYTES:
+        raise RuntimeError("Texture exceeds the safe import size limit")
+    try:
+        from PIL import Image
+        with Image.open(image) as source:
+            normalized=source.convert("RGB")
+            normalized.thumbnail((2048,2048))
+            return normalized.width, normalized.height, normalized.tobytes()
+    except ImportError:
+        bmp=destination/"import_texture.bmp"
+        result=subprocess.run(["/usr/bin/sips","-Z","2048","-s","format","bmp",str(image),"--out",str(bmp)],
+                              capture_output=True,text=True) if Path("/usr/bin/sips").exists() else None
+        if not result or result.returncode or not bmp.exists():
+            raise RuntimeError("Textured import needs Pillow, or macOS image conversion support")
+        data=bmp.read_bytes()
+        offset=struct.unpack_from("<I",data,10)[0]
+        width=struct.unpack_from("<i",data,18)[0]
+        raw_height=struct.unpack_from("<i",data,22)[0]
+        height=abs(raw_height)
+        bits=struct.unpack_from("<H",data,28)[0]
+        if bits not in (24,32) or width<=0 or height<=0:
+            raise RuntimeError("Texture could not be read for OBJ import")
+        stride=((width*(bits//8)+3)//4)*4
+        pixels=bytearray()
+        rows=range(height-1,-1,-1) if raw_height>0 else range(height)
+        for row in rows:
+            start=offset+row*stride
+            for column in range(width):
+                blue,green,red=data[start+column*(bits//8):start+column*(bits//8)+3]
+                pixels.extend((red,green,blue))
+        return width,height,bytes(pixels)
+
+def texture_pixel(texture, u, v):
+    width,height,pixels=texture
+    x=min(width-1,max(0,int((u%1.0)*(width-1))))
+    y=min(height-1,max(0,int((1-(v%1.0))*(height-1))))
+    offset=(y*width+x)*3
+    return tohex(pixels[offset],pixels[offset+1],pixels[offset+2])
+
+def quantized_texture_color(color, step=8):
+    return tohex(*(min(255,(channel//step)*step+step//2) for channel in rgb(color)))
+
+def kmeans_colors(colors, limit, iterations=10):
+    counts=Counter(colors)
+    unique=list(counts)
+    if len(unique)<=limit:
+        palette=sorted(unique,key=lambda c:(-counts[c],c))
+    else:
+        weighted=sorted(unique,key=lambda c:(-counts[c],c))
+        centers=[rgb_to_lab(*rgb(weighted[0]))]
+        while len(centers)<limit:
+            candidate=max(weighted,key=lambda c:min(delta_e_2000(rgb_to_lab(*rgb(c)),center)
+                                                     for center in centers)*counts[c])
+            centers.append(rgb_to_lab(*rgb(candidate)))
+        for _ in range(iterations):
+            groups=[[] for _ in centers]
+            for color,count in counts.items():
+                lab=rgb_to_lab(*rgb(color))
+                index=min(range(len(centers)),key=lambda i:delta_e_2000(lab,centers[i]))
+                groups[index].append((lab,count))
+            new=[]
+            for center,items in zip(centers,groups):
+                total=sum(count for _,count in items)
+                new.append(tuple(sum(lab[axis]*count for lab,count in items)/total for axis in range(3))
+                           if total else center)
+            if new==centers:
+                break
+            centers=new
+        palette=[tohex(*lab_to_rgb(*center)) for center in centers]
+    assignment={color:min(range(len(palette)),key=lambda i:dist(color,palette[i]))+1 for color in counts}
+    return palette,assignment
+
+def obj_geometry(source):
+    positions=[]; texture_coordinates=[]; triangles=[]; missing_uv=0
+    with source.open("r",errors="replace") as handle:
+        for line in handle:
+            values=line.strip().split()
+            if not values:
+                continue
+            if values[0]=="v" and len(values)>=4:
+                positions.append(tuple(float(value) for value in values[1:4]))
+            elif values[0]=="vt" and len(values)>=3:
+                texture_coordinates.append((float(values[1]),float(values[2])))
+            elif values[0]=="f" and len(values)>=4:
+                corners=[]
+                for token in values[1:]:
+                    indices=token.split("/")
+                    vertex=int(indices[0])
+                    vertex=vertex-1 if vertex>0 else len(positions)+vertex
+                    uv=None
+                    if len(indices)>1 and indices[1]:
+                        coord=int(indices[1])
+                        uv=coord-1 if coord>0 else len(texture_coordinates)+coord
+                    if not (0<=vertex<len(positions)):
+                        raise RuntimeError("OBJ face references a missing vertex")
+                    if uv is None or not (0<=uv<len(texture_coordinates)):
+                        missing_uv+=1
+                        uv=None
+                    corners.append((vertex,uv))
+                for index in range(1,len(corners)-1):
+                    triangles.append((corners[0],corners[index],corners[index+1]))
+                    if len(triangles)>MAX_IMPORT_FACES:
+                        raise RuntimeError("OBJ exceeds the import face safety limit")
+    if not positions or not triangles:
+        raise RuntimeError("OBJ import found no printable triangle mesh")
+    return positions,texture_coordinates,triangles,missing_uv
+
+def paint_code_for_slot(slot):
+    return "".join(HEX_DIGITS[nibble] for nibble in reversed(encode_paint_state(slot)))
+
+def basic_project_settings(colors):
+    count=len(colors)
+    matrix=["0" if row==column else "120" for row in range(count) for column in range(count)]
+    return {
+        "filament_colour":colors,
+        "filament_settings_id":[MIXED_PROFILE_ID]*count,
+        "filament_ids":[MIXED_FILAMENT_ID]*count,
+        "filament_is_mixed":["0"]*count,
+        "filament_mixed_components":[""]*count,
+        "filament_mixed_sublayer_ratios":[""]*count,
+        "filament_multi_colour":colors[:],
+        "default_filament_colour":[""]*count,
+        "filament_type":["PLA"]*count,
+        "filament_vendor":["Bambu Lab"]*count,
+        "flush_volumes_matrix":matrix,
+    }
+
+def import_obj_project(source, destination, temp_directory, texture_override=None, internal_colors=48, progress=None):
+    texture=Path(texture_override).expanduser().resolve() if texture_override else obj_texture(source)
+    if texture is None or not texture.is_file():
+        raise RuntimeError("OBJ import requires a readable material texture or an explicit texture image")
+    if texture.suffix.lower() not in (".png",".jpg",".jpeg"):
+        raise RuntimeError("OBJ import currently embeds PNG or JPEG textures; convert other texture formats first")
+    positions,uvs,triangles,missing_uv=obj_geometry(source)
+    if missing_uv:
+        raise RuntimeError("OBJ import requires UV coordinates on every painted face")
+    if progress:
+        progress(0.07, f"Loading polygons: {len(triangles):,} textured triangles")
+    pixel_data=load_image_pixels(texture,temp_directory)
+    if progress:
+        progress(0.08, "Sampling texture colors")
+    sampled=[]
+    for triangle in triangles:
+        coords=[uvs[corner[1]] for corner in triangle]
+        u=sum(point[0] for point in coords)/3; v=sum(point[1] for point in coords)/3
+        sampled.append(quantized_texture_color(texture_pixel(pixel_data,u,v)))
+    if progress:
+        progress(0.09, "Clustering sampled colors into printable paint states")
+    internal_limit=max(MAX_BAMBU_PAINT_SLOT,min(128,int(internal_colors)))
+    analysis_palette,_=kmeans_colors(sampled,min(internal_limit,len(set(sampled))))
+    palette,assignment=kmeans_colors(sampled,min(MAX_BAMBU_PAINT_SLOT,len(set(sampled))))
+    if len(palette)<MIN_REAL_SLOTS:
+        palette.append("#000000" if dist(palette[0],"#000000")>dist(palette[0],"#FFFFFF") else "#FFFFFF")
+    texture_extension=texture.suffix.lower() if texture.suffix.lower() in (".png",".jpg",".jpeg") else ".png"
+    if texture_extension==".jpeg":
+        texture_extension=".jpg"
+    texture_name="source_texture"+texture_extension
+    object_model=temp_directory/"import_object_1.model"
+    with object_model.open("w") as model:
+        model.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        model.write('<model unit="millimeter" xml:lang="en-US" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">\n')
+        model.write('<resources>\n')
+        model.write(f'<m:texture2d id="2" path="/3D/Textures/{texture_name}" contenttype="image/{texture_extension[1:]}" tilestyleu="wrap" tilestylev="wrap"/>\n')
+        model.write('<m:texture2dgroup id="3" texid="2">\n')
+        for triangle in triangles:
+            for corner in triangle:
+                u,v=uvs[corner[1]]
+                model.write(f'<m:tex2coord u="{u:.7f}" v="{v:.7f}"/>\n')
+        model.write('</m:texture2dgroup>\n<object id="1" type="model"><mesh><vertices>\n')
+        for x,y,z in positions:
+            model.write(f'<vertex x="{x:.7f}" y="{y:.7f}" z="{z:.7f}"/>\n')
+        model.write('</vertices><triangles>\n')
+        for index,(triangle,color) in enumerate(zip(triangles,sampled)):
+            texture_index=index*3
+            slot=assignment[color]
+            model.write(
+                f'<triangle v1="{triangle[0][0]}" v2="{triangle[1][0]}" v3="{triangle[2][0]}" '
+                f'pid="3" p1="{texture_index}" p2="{texture_index+1}" p3="{texture_index+2}" '
+                f'paint_color="{paint_code_for_slot(slot)}"/>\n'
+            )
+        model.write('</triangles></mesh></object>\n</resources><build><item objectid="1"/></build>\n</model>\n')
+    content_types=('<?xml version="1.0" encoding="UTF-8"?>'
+                   '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                   '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                   '<Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>'
+                   '<Default Extension="config" ContentType="application/octet-stream"/>'
+                   f'<Default Extension="{texture_extension[1:]}" ContentType="image/{texture_extension[1:]}"/>'
+                   '</Types>')
+    rels=('<?xml version="1.0" encoding="UTF-8"?>'
+          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+          '<Relationship Target="/3D/Objects/object_1.model" Id="rel-1" '
+          'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel"/>'
+          '</Relationships>')
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    if progress:
+        progress(0.11, "Building imported painted project")
+    with zipfile.ZipFile(destination,"w",zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml",content_types)
+        archive.writestr("_rels/.rels",rels)
+        archive.writestr("Metadata/project_settings.config",json.dumps(basic_project_settings(palette),indent=2))
+        archive.write(object_model,"3D/Objects/object_1.model")
+        archive.write(texture,f"3D/Textures/{texture_name}")
+    return {
+        "sourceType":"Textured OBJ",
+        "texture":texture.name,
+        "vertexCount":len(positions),
+        "triangleCount":len(triangles),
+        "internalColorCount":len(analysis_palette),
+        "exportColorCount":len(palette),
+        "compressedForBambu":len(analysis_palette)>len(palette),
+        "textureSamplingMaxDimension":2048,
+    }
+
+def read_glb_document(source):
+    with source.open("rb") as handle:
+        header=handle.read(12)
+        if len(header)!=12 or header[:4]!=b"glTF":
+            raise RuntimeError("GLB import header is invalid")
+        _,version,total=struct.unpack("<4sII",header)
+        if version!=2 or total>MAX_REFERENCE_BYTES:
+            raise RuntimeError("GLB import is unsupported or exceeds the safe size limit")
+        json_length,json_type=struct.unpack("<II",handle.read(8))
+        if json_type!=0x4E4F534A:
+            raise RuntimeError("GLB import contains no JSON scene")
+        document=json.loads(handle.read(json_length).decode("utf-8"))
+        declared_faces=0
+        for mesh in document.get("meshes",[]):
+            for primitive in mesh.get("primitives",[]):
+                if primitive.get("mode",4)!=4:
+                    continue
+                accessor_index=primitive.get("indices")
+                if accessor_index is None:
+                    accessor_index=primitive.get("attributes",{}).get("POSITION")
+                if accessor_index is not None:
+                    declared_faces+=int(document["accessors"][accessor_index].get("count",0))//3
+        if declared_faces>MAX_IMPORT_FACES:
+            raise RuntimeError(
+                "GLB exceeds the 2,000,000-face import safety limit. Reduce the mesh first "
+                "or use it as a visual reference with a painted 3MF."
+            )
+        bin_length,bin_type=struct.unpack("<II",handle.read(8))
+        if bin_type!=0x004E4942:
+            raise RuntimeError("GLB import contains no binary geometry buffer")
+        binary=handle.read(bin_length)
+    return document,binary
+
+def matrix_multiply(left, right):
+    return [sum(left[row*4+k]*right[k*4+column] for k in range(4))
+            for row in range(4) for column in range(4)]
+
+def glb_node_matrix(node):
+    if "matrix" in node:
+        raw=node["matrix"]
+        return [float(raw[column*4+row]) for row in range(4) for column in range(4)]
+    tx,ty,tz=(node.get("translation") or [0,0,0])
+    sx,sy,sz=(node.get("scale") or [1,1,1])
+    x,y,z,w=(node.get("rotation") or [0,0,0,1])
+    rotation=[
+        1-2*y*y-2*z*z, 2*x*y-2*z*w, 2*x*z+2*y*w, 0,
+        2*x*y+2*z*w, 1-2*x*x-2*z*z, 2*y*z-2*x*w, 0,
+        2*x*z-2*y*w, 2*y*z+2*x*w, 1-2*x*x-2*y*y, 0,
+        0,0,0,1,
+    ]
+    scale=[sx,0,0,0, 0,sy,0,0, 0,0,sz,0, 0,0,0,1]
+    translation=[1,0,0,tx, 0,1,0,ty, 0,0,1,tz, 0,0,0,1]
+    return matrix_multiply(translation,matrix_multiply(rotation,scale))
+
+def read_glb_accessor(document, binary, accessor_index):
+    accessor=document["accessors"][accessor_index]
+    view=document["bufferViews"][accessor["bufferView"]]
+    if view.get("buffer",0)!=0 or "sparse" in accessor:
+        raise RuntimeError("GLB sparse or external buffers are not supported for painted import")
+    types={"SCALAR":1,"VEC2":2,"VEC3":3}
+    formats={5121:"B",5123:"H",5125:"I",5126:"f"}
+    components=types.get(accessor.get("type"))
+    fmt=formats.get(accessor.get("componentType"))
+    if components is None or fmt is None:
+        raise RuntimeError("GLB accessor format is not supported for painted import")
+    item_size=struct.calcsize("<"+fmt*components)
+    stride=int(view.get("byteStride",item_size))
+    start=int(view.get("byteOffset",0))+int(accessor.get("byteOffset",0))
+    count=int(accessor.get("count",0))
+    output=[]
+    for index in range(count):
+        offset=start+index*stride
+        if offset+item_size>len(binary):
+            raise RuntimeError("GLB accessor extends outside the binary buffer")
+        output.append(struct.unpack_from("<"+fmt*components,binary,offset))
+    return output
+
+def import_glb_project(source, destination, temp_directory, internal_colors=48, progress=None):
+    document,binary=read_glb_document(source)
+    if len(document.get("images",[]))!=1:
+        raise RuntimeError("GLB painted import currently supports exactly one embedded texture image")
+    texture=glb_texture(source,temp_directory)
+    if texture is None:
+        raise RuntimeError("GLB painted import requires an embedded texture")
+    positions=[]; coordinates=[]; faces=[]
+    identity=[1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+    nodes=document.get("nodes",[])
+    meshes=document.get("meshes",[])
+
+    def transform(point, matrix):
+        x,y,z=point
+        return (
+            matrix[0]*x+matrix[1]*y+matrix[2]*z+matrix[3],
+            matrix[4]*x+matrix[5]*y+matrix[6]*z+matrix[7],
+            matrix[8]*x+matrix[9]*y+matrix[10]*z+matrix[11],
+        )
+    def add_mesh(mesh_index, world):
+        for primitive in meshes[mesh_index].get("primitives",[]):
+            if primitive.get("mode",4)!=4 or "POSITION" not in primitive.get("attributes",{}) or "TEXCOORD_0" not in primitive.get("attributes",{}):
+                raise RuntimeError("GLB painted import requires triangle primitives with POSITION and TEXCOORD_0")
+            if "extensions" in primitive:
+                raise RuntimeError("Compressed GLB primitives are not supported for painted import")
+            points=read_glb_accessor(document,binary,primitive["attributes"]["POSITION"])
+            texcoords=read_glb_accessor(document,binary,primitive["attributes"]["TEXCOORD_0"])
+            if len(points)!=len(texcoords):
+                raise RuntimeError("GLB position and UV accessor counts do not match")
+            indices=(read_glb_accessor(document,binary,primitive["indices"]) if "indices" in primitive
+                     else [(index,) for index in range(len(points))])
+            flattened=[int(item[0]) for item in indices]
+            if len(flattened)%3:
+                raise RuntimeError("GLB triangle index accessor has incomplete faces")
+            position_offset=len(positions); texture_offset=len(coordinates)
+            positions.extend(transform(point,world) for point in points)
+            coordinates.extend((float(point[0]),float(point[1])) for point in texcoords)
+            for index in range(0,len(flattened),3):
+                tri=flattened[index:index+3]
+                if any(value<0 or value>=len(points) for value in tri):
+                    raise RuntimeError("GLB face references a missing vertex")
+                faces.append(tuple((position_offset+value,texture_offset+value) for value in tri))
+                if len(faces)>MAX_IMPORT_FACES:
+                    raise RuntimeError("GLB exceeds the 2,000,000-face import safety limit. Reduce the mesh first or use it as a visual reference with a painted 3MF.")
+    def walk(node_index, parent):
+        node=nodes[node_index]
+        world=matrix_multiply(parent,glb_node_matrix(node))
+        if "mesh" in node:
+            add_mesh(int(node["mesh"]),world)
+        for child in node.get("children",[]):
+            walk(int(child),world)
+    scene_index=int(document.get("scene",0))
+    scene_nodes=(document.get("scenes") or [{}])[scene_index].get("nodes",[])
+    if scene_nodes:
+        for node in scene_nodes:
+            walk(int(node),identity)
+    else:
+        for mesh_index in range(len(meshes)):
+            add_mesh(mesh_index,identity)
+    if not positions or not faces:
+        raise RuntimeError("GLB import found no printable triangle mesh")
+    scratch_obj=temp_directory/"glb_source.obj"
+    scratch_mtl=temp_directory/"glb_source.mtl"
+    scratch_mtl.write_text(f"newmtl texture\nmap_Kd {texture.name}\n")
+    with scratch_obj.open("w") as handle:
+        handle.write("mtllib glb_source.mtl\nusemtl texture\n")
+        for x,y,z in positions:
+            handle.write(f"v {x:.7f} {y:.7f} {z:.7f}\n")
+        for u,v in coordinates:
+            handle.write(f"vt {u:.7f} {v:.7f}\n")
+        for triangle in faces:
+            handle.write("f "+" ".join(f"{vertex+1}/{uv+1}" for vertex,uv in triangle)+"\n")
+    result=import_obj_project(scratch_obj,destination,temp_directory,internal_colors=internal_colors,progress=progress)
+    result["sourceType"]="Textured GLB"
+    result["sourceFilename"]=source.name
+    return result
 
 def analyze_reference(reference, destination):
     if not reference:
@@ -526,8 +954,51 @@ def analyze_reference(reference, destination):
         "dominantColors":dominant,
     }
 
-def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None):
+def project_mesh_metrics(archive):
+    vertices=triangles=objects=texture_bytes=0
+    for info in archive.infolist():
+        lower=info.filename.lower()
+        if lower.startswith("3d/objects/") and lower.endswith(".model"):
+            objects+=1
+            with archive.open(info) as source:
+                for line in source:
+                    vertices+=line.count(b"<vertex ")
+                    triangles+=line.count(b"<triangle ")
+        if "texture" in lower and not lower.endswith(".config"):
+            texture_bytes+=info.file_size
+    mode="Fast" if triangles>1000000 else ("Balanced" if triangles>250000 else "High")
+    preview_memory=texture_bytes+vertices*32+triangles*12
+    preview_seconds=max(0.1, round(triangles/220000, 1))
+    return {
+        "objectCount":objects,
+        "vertexCount":vertices,
+        "triangleCount":triangles,
+        "polygonCount":triangles,
+        "textureBytes":texture_bytes,
+        "recommendedRenderMode":mode,
+        "previewMemoryEstimateBytes":preview_memory,
+        "previewBuildEstimateSeconds":preview_seconds,
+    }
+
+def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_model="perceptual", texture_override=None,
+                    progress=lambda fraction,message: None):
     infile=Path(infile).expanduser().resolve()
+    if infile.suffix.lower() in (".obj",".glb"):
+        temporary=Path(tempfile.mkdtemp(prefix="fsinspectimport_"))
+        try:
+            staged=temporary/f"{infile.stem}_painted_source.3mf"
+            progress(0.04, f"Opening textured {infile.suffix[1:].upper()} source")
+            imported=(import_obj_project(infile,staged,temporary,texture_override,progress=progress)
+                      if infile.suffix.lower()==".obj"
+                      else import_glb_project(infile,staged,temporary,progress=progress))
+            progress(0.60, "Generating source preview")
+            result=inspect_project(staged,thumbnail_dest,preview_mesh_dest,mix_model)
+            result.update({"input":str(infile),"filename":infile.name,"import":imported})
+            return result
+        finally:
+            shutil.rmtree(temporary,ignore_errors=True)
+    if infile.suffix.lower()!=".3mf":
+        raise RuntimeError("Preview supports a painted 3MF or textured OBJ/GLB source")
     with zipfile.ZipFile(infile) as archive:
         validated_archive_infos(archive)
         psrel=find_project_settings(archive.namelist())
@@ -537,6 +1008,7 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None):
         colors=colors_from_project(obj)
         if not colors:
             raise RuntimeError("No filament_colour array found")
+        metrics=project_mesh_metrics(archive)
         preview=None
         candidates=[
             "Metadata/plate_1.png",
@@ -551,7 +1023,7 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None):
             preview.write_bytes(archive.read(preview_name))
         preview_mesh=None
         if preview_mesh_dest:
-            preview_mesh=export_preview_mesh(archive, preview_colors_from_project(obj), preview_mesh_dest)
+            preview_mesh=export_preview_mesh(archive, preview_colors_from_project(obj,mix_model), preview_mesh_dest)
     return {
         "input":str(infile),
         "filename":infile.name,
@@ -559,6 +1031,7 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None):
         "sourceColors":colors,
         "thumbnail":str(preview) if preview else None,
         "previewMesh":str(preview_mesh) if preview_mesh else None,
+        "metrics":metrics,
     }
 
 def collect_paint_codes(tmp):
@@ -674,7 +1147,13 @@ def preview_face_slot(code, slot_count):
     _,referenced=remap_paint_code(code, max_input_slot=slot_count, max_output_slot=slot_count)
     return Counter(referenced).most_common(1)[0][0] if referenced else 1
 
-def export_preview_mesh(archive, colors, destination):
+def write_preview_materials(path, colors, material_prefix):
+    with path.open("w") as output:
+        for slot,color in enumerate(colors,start=1):
+            red,green,blue=(channel/255.0 for channel in rgb(color))
+            output.write(f"newmtl {material_prefix}_{slot}\nKd {red:.4f} {green:.4f} {blue:.4f}\nKa {red*.16:.4f} {green*.16:.4f} {blue*.16:.4f}\nNs 22\n\n")
+
+def export_preview_mesh(archive, colors, destination, material_prefix="slot"):
     """
     Write a reduced, colored viewport mesh without altering print geometry.
     Object XML can be hundreds of megabytes, so this reads line-oriented 3MF
@@ -752,20 +1231,31 @@ def export_preview_mesh(archive, colors, destination):
     faces_by_slot={}
     for mapped,slot in display_faces.values():
         faces_by_slot.setdefault(slot,[]).append(mapped)
-    with mtl_path.open("w") as output:
-        for slot,color in enumerate(colors,start=1):
-            red,green,blue=(channel/255.0 for channel in rgb(color))
-            output.write(f"newmtl slot_{slot}\nKd {red:.4f} {green:.4f} {blue:.4f}\nKa {red*.16:.4f} {green*.16:.4f} {blue*.16:.4f}\nNs 22\n\n")
+    write_preview_materials(mtl_path,colors,material_prefix)
     with obj_path.open("w") as output:
         output.write(f"mtllib {mtl_path.name}\n")
         output.write("# Reduced viewport mesh generated from painted 3MF facets.\n")
         for x,y,z in display_vertices:
             output.write(f"v {x:.5f} {y:.5f} {z:.5f}\n")
         for slot in sorted(faces_by_slot):
-            output.write(f"usemtl slot_{slot}\n")
+            output.write(f"usemtl {material_prefix}_{slot}\n")
             for first,second,third in faces_by_slot[slot]:
                 output.write(f"f {first} {second} {third}\n")
     return obj_path
+
+def recolor_preview_mesh(source_mesh, colors, destination, material_prefix):
+    """Reuse reduced preview geometry for another analytical color overlay."""
+    source_mesh=Path(source_mesh)
+    destination=Path(destination).expanduser().with_suffix(".obj")
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    write_preview_materials(destination.with_suffix(".mtl"),colors,material_prefix)
+    with source_mesh.open("r") as source, destination.open("w") as output:
+        first=source.readline()
+        output.write(f"mtllib {destination.with_suffix('.mtl').name}\n")
+        if not first.startswith("mtllib "):
+            output.write(first)
+        shutil.copyfileobj(source,output)
+    return destination
 
 def anchor_name(anchor):
     return anchor["name"]
@@ -777,22 +1267,22 @@ def nearest_anchor_error(color, anchors):
     return min((dist(color,anchor_color(anchor)),i+1,anchor_name(anchor),anchor_color(anchor))
                for i,anchor in enumerate(anchors))
 
-def best_mix_recipe(color, anchors):
+def best_mix_recipe(color, anchors, mix_model="perceptual", allow_three=True):
     ah=[anchor_color(anchor) for anchor in anchors]
     best_err=999999.0; best=None
     for i,j in combinations(range(len(anchors)),2):
         for r0,r1 in R2:
-            p=mix([ah[i],ah[j]],[r0,r1]); d=dist(color,p)
+            p=mix([ah[i],ah[j]],[r0,r1],mix_model); d=dist(color,p)
             if d<best_err:
                 best_err=d; best=([i+1,j+1],[r0,r1],p)
     if best is None:
         direct=nearest_anchor_error(color,anchors)
         return [direct[1]],[1.0],direct[3],direct[0]
-    if best_err>12:
+    if allow_three and best_err>12:
         best3_err=best_err; best3=best
         for combo in combinations(range(len(anchors)),3):
             for r0,r1,r2 in R3:
-                p=mix([ah[combo[0]],ah[combo[1]],ah[combo[2]]],[r0,r1,r2]); d=dist(color,p)
+                p=mix([ah[combo[0]],ah[combo[1]],ah[combo[2]]],[r0,r1,r2],mix_model); d=dist(color,p)
                 if d<best3_err:
                     best3_err=d; best3=([combo[0]+1,combo[1]+1,combo[2]+1],[r0,r1,r2],p)
         if (best_err-best3_err)>=2.5 and ((best_err-best3_err)/max(best_err,1e-9))>=0.15:
@@ -811,7 +1301,9 @@ def select_cmykw_anchors(pool, count):
         remaining=[candidate for candidate in remaining if candidate["color"] != match["color"]]
     return selected
 
-def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slots="auto", custom_catalog_path=None):
+def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slots="auto",
+                   custom_catalog_path=None, reference=None, mix_model="perceptual",
+                   quality_bias=DEFAULT_QUALITY_BIAS):
     requested=None if str(real_slots)=="auto" else int(real_slots)
     minimum=4 if mode=="cmykw" else MIN_REAL_SLOTS
     if requested is not None and (requested<minimum or requested>MAX_REAL_SLOTS):
@@ -829,15 +1321,23 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
     used=[(i+1,c,float(usage.get(i+1,0))) for i,c in enumerate(old_colors) if usage.get(i+1,0)>0]
     if not used: used=[(i+1,c,1.0) for i,c in enumerate(old_colors)]
     total=sum(w for _,_,w in used) or 1.0
+    targets=list(used)
+    if reference and reference.get("dominantColors"):
+        # A source texture can expose important colors which sparse painted
+        # facet usage understates. Keep it influential, never dominant.
+        reference_weight=total*(0.10+0.001*max(0,min(100,quality_bias)))
+        targets.extend((0,item["color"],reference_weight*item["weight"])
+                       for item in reference["dominantColors"])
+    target_total=sum(w for _,_,w in targets) or 1.0
     def score(anchors):
         ah=[anchor_color(anchor) for anchor in anchors]
         s=0.0
-        for _,c,w in used:
+        for _,c,w in targets:
             direct=min(dist(c,a) for a in ah)
             pair=direct
             for i,j in combinations(range(len(ah)),2):
-                pair=min(pair,dist(c,mix([ah[i],ah[j]],[.5,.5])))
-            s+=(w/total)*pair
+                pair=min(pair,dist(c,mix([ah[i],ah[j]],[.5,.5],mix_model)))
+            s+=(w/target_total)*pair
         lums=[luminance(a) for a in ah]
         if max(lums)<210: s+=12
         if min(lums)>65: s+=12
@@ -892,34 +1392,52 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
         weighted=0.0
         for _,color,weight in used:
             direct=nearest_anchor_error(color,anchors)[0]
-            mix_error=best_mix_recipe(color,anchors)[3]
+            mix_error=best_mix_recipe(color,anchors,mix_model,quality_bias>=70)[3]
             weighted+=(weight/total)*min(direct,mix_error)
         # A new physical slot must buy noticeable visual improvement.
-        trials.append((weighted+(count-minimum)*0.9,weighted,anchors))
+        physical_penalty=(count-minimum)*(1.35-(max(0,min(100,quality_bias))/100)*0.9)
+        trials.append((weighted+physical_penalty,weighted,anchors))
     return min(trials,key=lambda trial:trial[0])[2]
 
-def build_palette(old_colors, anchors):
+def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_BIAS, mix_model="perceptual"):
     real_count=len(anchors)
     newc=[anchor_color(anchor) for anchor in anchors]
     ism=["0"]*real_count; comps=[""]*real_count; ratios=[""]*real_count
     old_slot_to_new_slot={}
-    rows=[]
+    rows_by_slot={}
     next_slot=real_count+1
+    quality_bias=max(0,min(100,int(quality_bias)))
+    min_gain=MIN_MIX_GAIN+(100-quality_bias)*0.045
+    max_unique_mixes=max(2,min(MAX_BAMBU_PAINT_SLOT-real_count,3+round(quality_bias/6)))
+    mix_candidates=[]
     for old_slot,target in enumerate(old_colors, start=1):
         direct_err,direct_slot,direct_name,direct_hex=nearest_anchor_error(target,anchors)
-        cs,rs,preview,mix_err=best_mix_recipe(target,anchors)
-        if direct_err<=DIRECT_ANCHOR_DE or (direct_err-mix_err)<MIN_MIX_GAIN:
-            old_slot_to_new_slot[old_slot]=direct_slot
-            rows.append([old_slot,direct_slot,target,"ANCHOR",direct_name,"","",direct_hex,f"{direct_err:.2f}"])
-        else:
-            old_slot_to_new_slot[old_slot]=next_slot
-            newc.append(target)
+        cs,rs,preview,mix_err=best_mix_recipe(target,anchors,mix_model,quality_bias>=70)
+        gain=direct_err-mix_err
+        weight=float((usage or {}).get(old_slot,1.0))
+        old_slot_to_new_slot[old_slot]=direct_slot
+        rows_by_slot[old_slot]=[old_slot,direct_slot,target,"ANCHOR",direct_name,"","",
+                                direct_hex,f"{direct_err:.2f}",f"{direct_err:.2f}","0.00"]
+        if direct_err>DIRECT_ANCHOR_DE and gain>=min_gain:
+            mix_candidates.append((gain*weight,gain,old_slot,target,cs,rs,preview,mix_err,direct_err))
+    recipes={}
+    for _,gain,old_slot,target,cs,rs,preview,mix_err,direct_err in sorted(mix_candidates,reverse=True):
+        key=(tuple(cs),tuple(round(x,4) for x in rs))
+        if key not in recipes and len(recipes)>=max_unique_mixes:
+            continue
+        if key not in recipes:
+            recipes[key]=next_slot
+            newc.append(preview)
             ism.append("1")
             comps.append(",".join(map(str,cs)))
             ratios.append(",".join(f"{x:.4f}" for x in rs))
-            rows.append([old_slot,next_slot,target,"MIX","",comps[-1],ratios[-1],preview,f"{mix_err:.2f}"])
             next_slot+=1
-    return newc,ism,comps,ratios,old_slot_to_new_slot,rows
+        mapped_slot=recipes[key]
+        old_slot_to_new_slot[old_slot]=mapped_slot
+        rows_by_slot[old_slot]=[old_slot,mapped_slot,target,"MIX","",",".join(map(str,cs)),
+                                ",".join(f"{x:.4f}" for x in rs),preview,f"{mix_err:.2f}",
+                                f"{direct_err:.2f}",f"{gain:.2f}"]
+    return newc,ism,comps,ratios,old_slot_to_new_slot,[rows_by_slot[i] for i in sorted(rows_by_slot)]
 
 def source_slot_representatives(old_colors, anchors, old_slot_to_new_slot, rows, newn):
     real_count=len(anchors)
@@ -933,7 +1451,16 @@ def source_slot_representatives(old_colors, anchors, old_slot_to_new_slot, rows,
         representatives.append(mixed_source[new_slot])
     return representatives
 
-def quality_metrics(rows, usage, reference=None):
+def heatmap_color(error):
+    if error <= 2.0:
+        return "#37C977"
+    if error <= 6.0:
+        ratio=(error-2.0)/4.0
+        return tohex(55+190*ratio,201+14*ratio,119-82*ratio)
+    ratio=min(1.0,(error-6.0)/12.0)
+    return tohex(245,215-141*ratio,37-6*ratio)
+
+def quality_metrics(rows, usage, old_colors=None, reference=None, mix_model="perceptual"):
     fallback=0 if usage else 1
     weights={slot:float(usage.get(slot,fallback)) for slot,*_ in rows}
     total=sum(weights.values()) or 1.0
@@ -945,6 +1472,26 @@ def quality_metrics(rows, usage, reference=None):
         "maximumDeltaE":round(maximum,2),
         "qualityScore":round(max(0.0,100.0-estimated*2.2),1),
     }
+    predictions={row[0]:row[7] for row in rows}
+    if old_colors:
+        weighted_brightness=0.0
+        weighted_contrast=0.0
+        original_contrast=0.0
+        for slot,color in enumerate(old_colors,start=1):
+            weight=weights.get(slot,0.0)/total
+            if weight:
+                weighted_brightness+=weight*abs(rgb_to_lab(*rgb(color))[0]-rgb_to_lab(*rgb(predictions[slot]))[0])
+        for first in range(1,len(old_colors)+1):
+            for second in range(first+1,len(old_colors)+1):
+                pair_weight=(weights.get(first,0.0)*weights.get(second,0.0))/(total*total)
+                if not pair_weight:
+                    continue
+                original=dist(old_colors[first-1],old_colors[second-1])
+                predicted=dist(predictions[first],predictions[second])
+                original_contrast+=pair_weight*original
+                weighted_contrast+=pair_weight*abs(original-predicted)
+        result["brightnessError"]=round(weighted_brightness,2)
+        result["contrastRetention"]=round(max(0.0,100.0-(weighted_contrast/max(original_contrast,1e-6))*100),1)
     if reference and reference.get("dominantColors"):
         predictions=[row[7] for row in rows]
         reference_total=sum(item["weight"] for item in reference["dominantColors"]) or 1.0
@@ -952,7 +1499,114 @@ def quality_metrics(rows, usage, reference=None):
                   for item in reference["dominantColors"])
         result["referenceSimilarityScore"]=round(max(0.0,100.0-error*2.2),1)
         result["referenceEstimatedDeltaE"]=round(error,2)
+    mixed_weight=sum(weights[row[0]] for row in rows if row[3]=="MIX")/total
+    confidence=94.0-estimated*1.15-mixed_weight*(18 if mix_model=="optical-screen" else 13)
+    if not reference or not reference.get("dominantColors"):
+        confidence-=8
+    if any(row[3]=="MIX" and len(row[5].split(","))>2 for row in rows):
+        confidence-=5
+    result["confidenceScore"]=round(max(0.0,min(100.0,confidence)),1)
+    result["confidenceLabel"]="High" if result["confidenceScore"]>=78 else ("Medium" if result["confidenceScore"]>=55 else "Low")
+    result["mixModel"]=mix_model
     return result
+
+def printability_metrics(rows, usage, real_count, output_count, layouts, project):
+    weights={slot:float(usage.get(slot,0)) for slot,*_ in rows}
+    total=sum(weights.values()) or 1.0
+    mixed_rows=[row for row in rows if row[3]=="MIX"]
+    used_mixed_slots=sorted({row[1] for row in mixed_rows})
+    mixed_share=sum(weights.get(row[0],0.0) for row in mixed_rows)/total
+    purge_values=[]
+    for key,(kind,width) in layouts.items():
+        if kind=="matrix" and isinstance(project.get(key),list):
+            block=[float(value) for value in project[key][:output_count*output_count]]
+            purge_values.extend(value for index,value in enumerate(block)
+                                if index//output_count != index%output_count)
+            break
+    purge_mean=sum(purge_values)/len(purge_values) if purge_values else None
+    complexity_score=(len(used_mixed_slots)*5 + mixed_share*40 + max(0,real_count-2)*7)
+    difficulty="Low" if complexity_score<38 else ("Medium" if complexity_score<68 else "High")
+    suggestions=[]
+    if len(used_mixed_slots)>10:
+        suggestions.append("Move the quality-versus-waste control toward practical to reduce logical mixed colors.")
+    if mixed_share>0.55:
+        suggestions.append("Most painted usage is mixed; run a small calibration print before committing material.")
+    if real_count<MAX_REAL_SLOTS and len(used_mixed_slots)>4:
+        suggestions.append("An additional owned physical anchor may reduce mixed regions and purge risk.")
+    return {
+        "physicalSlots":real_count,
+        "mixedSlots":len(used_mixed_slots),
+        "paintedMixedShare":round(mixed_share*100,1),
+        "purgeTransitionMean":round(purge_mean,1) if purge_mean is not None else None,
+        "difficulty":difficulty,
+        "swapRisk":"High" if mixed_share>.55 else ("Medium" if used_mixed_slots else "Low"),
+        "filamentUsageEstimate":None,
+        "printTimeEstimate":None,
+        "sliceRequiredForTimeAndUsage":True,
+        "recommendations":suggestions,
+    }
+
+def candidate_palette(palette_source, inventory, custom_catalog_path):
+    if palette_source=="inventory":
+        return inventory_palette(inventory)
+    if palette_source=="custom":
+        return custom_palette(custom_catalog_path)
+    if palette_source=="exact-cmykw":
+        return []
+    return catalog_palette("all" if palette_source=="all-bambu" else "core",inventory)
+
+def additional_anchor_recommendation(old_colors, usage, anchors, palette_source, inventory,
+                                     custom_catalog_path, quality_bias, mix_model, current_quality):
+    if len(anchors)>=MAX_REAL_SLOTS or palette_source=="exact-cmykw":
+        return None
+    selected={anchor_color(anchor) for anchor in anchors}
+    best=None
+    for candidate in candidate_palette(palette_source,inventory,custom_catalog_path):
+        if anchor_color(candidate) in selected:
+            continue
+        trial=anchors+[candidate]
+        newc,_,_,_,_,rows=build_palette(old_colors,trial,usage,quality_bias,mix_model)
+        metrics=quality_metrics(rows,usage,old_colors,None,mix_model)
+        mix_count=len({row[1] for row in rows if row[3]=="MIX"})
+        gain=current_quality["estimatedDeltaE"]-metrics["estimatedDeltaE"]
+        score=gain*3-mix_count*0.02
+        if best is None or score>best[0]:
+            best=(score,candidate,gain,mix_count,len(newc),metrics)
+    if best is None or best[2]<0.25:
+        return None
+    _,candidate,gain,mix_count,_,metrics=best
+    return {
+        "name":anchor_name(candidate),
+        "color":anchor_color(candidate),
+        "estimatedDeltaEReduction":round(gain,2),
+        "estimatedQualityScore":metrics["qualityScore"],
+        "estimatedMixedSlots":mix_count,
+        "availability":"owned" if palette_source=="inventory" else "confirm before purchase",
+    }
+
+def expected_remapped_paint_counts(source_counts, slot_map, oldn, newn):
+    expected=Counter()
+    for code,count in source_counts.items():
+        mapped,_=remap_paint_code(code,slot_map,oldn,newn)
+        expected[mapped]+=count
+    return expected
+
+def analysis_preview_colors(output_colors, rows, real_count):
+    errors=defaultdict(list)
+    anchor_for_slot={}
+    for row in rows:
+        errors[row[1]].append(float(row[8]))
+        if row[3]=="ANCHOR":
+            anchor_for_slot[row[1]]=row[1]
+        else:
+            components=[int(value) for value in row[5].split(",") if value]
+            if components:
+                anchor_for_slot[row[1]]=components[0]
+    heat=[heatmap_color(max(errors.get(slot,[0.0]))) for slot in range(1,len(output_colors)+1)]
+    influence_palette=["#28B8D5","#E86C8C","#EDC949","#4E79A7","#59A14F","#B07AA1"]
+    influence=[influence_palette[(anchor_for_slot.get(slot,min(slot,real_count))-1)%len(influence_palette)]
+               for slot in range(1,len(output_colors)+1)]
+    return heat,influence
 
 def remap_paint_codes_by_codec(tmp, old_slot_to_new_slot, oldn, newn):
     patched=[]
@@ -1196,7 +1850,8 @@ def validate_arrays(obj,newn,real_count,layouts,source_off_diagonal_zeros=None):
         if any(r<=0 or r>=1 for r in rs) or abs(sum(rs)-1)>0.01:
             raise RuntimeError(f"Mixed slot {i+1} ratios are invalid")
 
-def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_zeros=None,preservation=None):
+def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_zeros=None,
+                            preservation=None, expected_paint_counts=None):
     with zipfile.ZipFile(outfile) as archive:
         validated_archive_infos(archive)
         psrel=find_project_settings(archive.namelist())
@@ -1205,6 +1860,8 @@ def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_
         obj,_=json.JSONDecoder().raw_decode(archive.read(psrel).decode("utf-8", errors="replace").lstrip())
         validate_arrays(obj,newn,real_count,layouts,source_off_diagonal_zeros)
         paint_codes, paint_counts=collect_archive_paint_codes(archive)
+        if expected_paint_counts is not None and paint_counts != expected_paint_counts:
+            raise RuntimeError("Paint remap validation failed: output states differ from the decoded expected mapping")
         usage=paint_slot_usage(paint_counts,newn)
         model_settings=next((n for n in archive.namelist() if n.lower().endswith("metadata/model_settings.config")),None)
         if model_settings:
@@ -1215,23 +1872,50 @@ def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_
                     if slot < 1 or slot > newn:
                         raise RuntimeError(f"Object metadata references missing extruder slot {slot}")
         preservation_result=verify_preservation(archive,preservation) if preservation else None
+        if preservation_result is not None:
+            preservation_result["paintRemapVerified"]=expected_paint_counts is not None
     return paint_codes, usage, preservation_result
 
 def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=True, real_slots="auto",
-            reference=None, custom_catalog_path=None, progress=lambda fraction,message: None):
+            reference=None, custom_catalog_path=None, quality_bias=DEFAULT_QUALITY_BIAS,
+            mix_model="perceptual", analysis_dir=None, texture_override=None,
+            internal_colors=48, progress=lambda fraction,message: None):
     infile=Path(infile).expanduser().resolve()
+    quality_bias=max(0,min(100,int(quality_bias)))
+    if mix_model not in MIX_MODELS:
+        raise RuntimeError(f"Unknown mixed-color prediction model {mix_model!r}")
     downloads=Path(output_dir).expanduser().resolve() if output_dir else Path.home()/"Downloads"
     downloads.mkdir(parents=True,exist_ok=True)
     suffix="CMYKW" if mode=="cmykw" else "OFFICIAL_BAMBU_DERIVED"
-    outfile=downloads/f"{infile.stem}_FullSpectrum_{suffix}_v0.3.3mf"
-    csvfile=downloads/f"{infile.stem}_FullSpectrum_{suffix}_v0.3_recipe.csv"
-    report=downloads/f"{infile.stem}_FullSpectrum_{suffix}_v0.3_report.txt"
+    outfile=downloads/f"{infile.stem}_FullSpectrum_{suffix}_{OUTPUT_VERSION}.3mf"
+    csvfile=downloads/f"{infile.stem}_FullSpectrum_{suffix}_{OUTPUT_VERSION}_recipe.csv"
+    report=downloads/f"{infile.stem}_FullSpectrum_{suffix}_{OUTPUT_VERSION}_report.txt"
     tmp=Path(tempfile.mkdtemp(prefix="fullspectrum_"))
     reference_tmp=Path(tempfile.mkdtemp(prefix="fsreference_"))
+    import_tmp=Path(tempfile.mkdtemp(prefix="fsimport_"))
     staged_outfile=outfile.with_suffix(outfile.suffix+".tmp")
     warnings=[]
+    imported=None
+    project_file=infile
     try:
         progress(0.04,f"Opening {infile.name}")
+        if infile.suffix.lower() in (".obj",".glb"):
+            progress(0.06,f"Importing textured {infile.suffix[1:].upper()} geometry, UV mapping and texture colors")
+            project_file=import_tmp/f"{infile.stem}_painted_source.3mf"
+            imported=(import_obj_project(infile,project_file,import_tmp,texture_override,internal_colors,progress)
+                      if infile.suffix.lower()==".obj"
+                      else import_glb_project(infile,project_file,import_tmp,internal_colors,progress))
+            if imported["compressedForBambu"]:
+                warnings.append(
+                    f"Extended analysis found {imported['internalColorCount']} source clusters; "
+                    f"paint export was compressed to {imported['exportColorCount']} Bambu-compatible colors."
+                )
+            if reference is None:
+                reference=str(infile)
+        elif infile.suffix.lower() in (".png",".jpg",".jpeg"):
+            raise RuntimeError("An image supplies color reference but has no printable geometry. Add it as a reference to a painted 3MF or textured OBJ.")
+        elif infile.suffix.lower()!=".3mf":
+            raise RuntimeError("Input must be a painted 3MF or an experimental textured OBJ/GLB import")
         minimum_inventory=4 if mode=="cmykw" else (MIN_REAL_SLOTS if str(real_slots)=="auto" else int(real_slots))
         inventory=read_bambu_inventory(required=palette_source=="inventory",minimum_colors=minimum_inventory)
         if palette_source=="inventory":
@@ -1243,7 +1927,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         else:
             progress(0.12,f"Using {len(catalog_palette('all' if palette_source=='all-bambu' else 'core',inventory))} Bambu Lab planning colors")
             warnings.append("Catalog colors are planning choices; confirm current regional availability before buying filament.")
-        with zipfile.ZipFile(infile) as z:
+        with zipfile.ZipFile(project_file) as z:
             names=z.namelist()
             safe_extract_archive(z,tmp)
         psrel=find_project_settings(names)
@@ -1269,16 +1953,21 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "custom":"a custom filament library",
             "exact-cmykw":"exact CMYKW roles",
         }[palette_source]
-        progress(0.22,"Selecting physical filaments from " + source_label)
-        anchors=select_anchors(old, usage, mode, inventory, palette_source,real_slots,custom_catalog_path)
+        progress(0.22,"Generating anchors from painted colors and " + source_label)
+        anchors=select_anchors(old, usage, mode, inventory, palette_source,real_slots,
+                               custom_catalog_path,reference_result,mix_model,quality_bias)
         real_count=len(anchors)
-        newc,ism,comps,ratios,old_slot_to_new_slot,rows=build_palette(old,anchors)
+        progress(0.34,"Building mixes with useful predicted visual gain")
+        newc,ism,comps,ratios,old_slot_to_new_slot,rows=build_palette(
+            old,anchors,usage,quality_bias,mix_model
+        )
         newn=len(newc)
         if newn > MAX_BAMBU_PAINT_SLOT:
             raise RuntimeError(f"Output requires {newn} slots, but Bambu paint_color supports only {MAX_BAMBU_PAINT_SLOT}")
 
         representatives=source_slot_representatives(old,anchors,old_slot_to_new_slot,rows,newn)
         progress(0.42,"Remapping painted facets with the Bambu paint-state codec")
+        expected_counts=expected_remapped_paint_counts(code_counts,old_slot_to_new_slot,oldn,newn)
         patched=remap_paint_codes_by_codec(tmp, old_slot_to_new_slot, oldn, newn)
         remapped_extruders=remap_model_setting_extruders(tmp,old_slot_to_new_slot)
 
@@ -1296,7 +1985,20 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             ensure_list(obj,key,newn,default)
         validate_arrays(obj,newn,real_count,layouts,source_off_diagonal_zeros)
         pspath.write_text(json.dumps(obj,indent=2,ensure_ascii=True))
-        quality=quality_metrics(rows,usage,reference_result)
+        quality=quality_metrics(rows,usage,old,reference_result,mix_model)
+        printability=printability_metrics(rows,usage,real_count,newn,layouts,obj)
+        recommendation=additional_anchor_recommendation(
+            old,usage,anchors,palette_source,inventory,custom_catalog_path,
+            quality_bias,mix_model,quality
+        )
+        if recommendation:
+            printability["recommendations"].append(
+                f"Consider {recommendation['name']} ({recommendation['color']}): estimated "
+                f"Delta E reduction {recommendation['estimatedDeltaEReduction']:.2f} with "
+                f"{recommendation['estimatedMixedSlots']} mixed slots; {recommendation['availability']}."
+            )
+        if mix_model=="optical-screen":
+            warnings.append("Optical-screen prediction is experimental and uncalibrated; validate it with a small material test.")
         if mode=="cmykw" and palette_source=="inventory":
             poor=[role for anchor,(role,target) in zip(anchors,CMYK_TARGETS)
                   if dist(anchor_color(anchor),target)>CMYKW_ROLE_WARNING_DE]
@@ -1310,20 +2012,37 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             for p in tmp.rglob("*"):
                 if p.is_file(): z.write(p,p.relative_to(tmp).as_posix())
         output_codes, output_usage, preserved=validate_output_archive(
-            staged_outfile,newn,real_count,layouts,source_off_diagonal_zeros,preservation
+            staged_outfile,newn,real_count,layouts,source_off_diagonal_zeros,preservation,expected_counts
         )
         if outfile.exists(): outfile.unlink()
         staged_outfile.replace(outfile)
 
+        analysis_assets=None
+        if analysis_dir:
+            analysis_root=Path(analysis_dir).expanduser().resolve()
+            analysis_root.mkdir(parents=True,exist_ok=True)
+            heat_colors,influence_colors=analysis_preview_colors(newc,rows,real_count)
+            with zipfile.ZipFile(outfile) as written:
+                heatmap=export_preview_mesh(written,heat_colors,analysis_root/"color-loss.obj","loss")
+            influence=(recolor_preview_mesh(heatmap,influence_colors,analysis_root/"anchor-influence.obj","loss")
+                       if heatmap else None)
+            analysis_assets={
+                "heatmapMesh":str(heatmap) if heatmap else None,
+                "anchorInfluenceMesh":str(influence) if influence else None,
+            }
+
         with open(csvfile,"w",newline="") as f:
             w=csv.writer(f)
-            w.writerow(["old_slot","new_slot","target_color","kind","recipe_label","component_ids","ratios","predicted_color","estimated_deltaE"])
+            w.writerow(["old_slot","new_slot","target_color","kind","recipe_label","component_ids","ratios","predicted_color","estimated_deltaE","direct_deltaE","visual_gain"])
             w.writerows(rows)
         report.write_text("\n".join([
             "FullSpectrum Studio conversion and validation report",
             f"Mode: {mode}",
             f"Input: {infile.name}",
             f"Output: {outfile.name}",
+            *( [f"Imported source: {imported['sourceType']}; {imported['triangleCount']} texture-sampled triangles",
+                f"Source clusters / Bambu paint colors: {imported['internalColorCount']} / {imported['exportColorCount']}"]
+               if imported else [] ),
             f"Original slots: {oldn}",
             f"Physical filament slots: {real_count}",
             f"Output slots: {newn}",
@@ -1333,14 +2052,26 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             f"Patched model files: {', '.join(patched) if patched else 'none'}",
             f"Remapped object/part extruder assignments: {remapped_extruders}",
             f"Palette source: {palette_source}",
-            f"Inventory source: {inventory['source'] or 'not required for this palette source'}",
+            f"Quality versus waste priority: {quality_bias} / 100",
+            f"Mixed-color prediction: {mix_model} (unmeasured planning estimate)",
+            f"Inventory source: {'local Bambu Studio Beta inventory (read only)' if inventory['source'] else 'not used for this palette source'}",
             f"Available PLA inventory: {inventory['usableCount']} spools / {inventory['totalGrams']:.0f} g",
             f"Introduced off-diagonal zero purge transitions: 0",
             f"Estimated mean Delta E: {quality['estimatedDeltaE']:.2f}",
             f"Estimated quality score: {quality['qualityScore']:.1f} / 100",
+            f"Confidence score: {quality['confidenceScore']:.1f} / 100 ({quality['confidenceLabel']})",
+            f"Brightness error estimate: {quality.get('brightnessError',0):.2f}",
+            f"Contrast retention estimate: {quality.get('contrastRetention',0):.1f} / 100",
+            f"Painted mixed share: {printability['paintedMixedShare']:.1f}%",
+            f"Printability difficulty: {printability['difficulty']} (pre-slice proxy)",
+            *( [f"Next-anchor suggestion: {recommendation['name']} {recommendation['color']} "
+                f"(estimated Delta E reduction {recommendation['estimatedDeltaEReduction']:.2f}; "
+                f"{recommendation['availability']})"] if recommendation else [] ),
+            "Time, swap count and actual filament usage: require slicing; not guessed here.",
             f"Geometry and UV preservation: {'verified' if preserved['geometryPreserved'] else 'failed'}",
             f"Texture/resource preservation: {'verified' if preserved['textureResourcesPreserved'] else 'failed'}",
-            *( [f"Reference: {reference_result['filename']} ({reference_result['kind']})",
+            f"Decoded paint remap equivalence: {'verified' if preserved['paintRemapVerified'] else 'failed'}",
+            *( [f"Reference type: {reference_result['kind']}",
                 f"Reference similarity estimate: {quality.get('referenceSimilarityScore','not sampled')} / 100"]
                if reference_result else [] ),
             "",
@@ -1359,7 +2090,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         if reveal and sys.platform=="darwin":
             subprocess.run(["open","-R",str(outfile)])
         recipes=[]
-        for old_slot,new_slot,target,kind,label,component_ids,ratio_text,preview,error in rows:
+        for old_slot,new_slot,target,kind,label,component_ids,ratio_text,preview,error,direct_error,gain in rows:
             available_grams=None
             if kind=="MIX" and all(anchors[int(value)-1]["remainingGrams"] is not None for value in component_ids.split(",")):
                 component_slots=[int(value) for value in component_ids.split(",")]
@@ -1376,6 +2107,8 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
                 "ratios":ratio_text,
                 "preview":preview,
                 "deltaE":float(error),
+                "directDeltaE":float(direct_error),
+                "visualGain":float(gain),
                 "availableGrams":available_grams,
             })
         progress(1.0,"Output validated and ready to open in Bambu Studio")
@@ -1392,8 +2125,12 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "validation":"OK",
             "paintedSlots":sorted(output_usage),
             "quality":quality,
+            "printability":printability,
+            "recommendation":recommendation,
             "preservation":preserved,
             "reference":reference_result,
+            "import":imported,
+            "analysisAssets":analysis_assets,
             "warnings":warnings,
             "inventory":inventory,
             "anchors":[
@@ -1414,6 +2151,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             staged_outfile.unlink()
         shutil.rmtree(tmp,ignore_errors=True)
         shutil.rmtree(reference_tmp,ignore_errors=True)
+        shutil.rmtree(import_tmp,ignore_errors=True)
 
 def main():
     parser=argparse.ArgumentParser(description="FullSpectrum Bambu-compatible 3MF converter")
@@ -1423,6 +2161,14 @@ def main():
     parser.add_argument("--real-slots",choices=["auto","2","3","4","5","6"],default="auto")
     parser.add_argument("--reference",help="Optional OBJ, GLB or texture image used as a visual reference")
     parser.add_argument("--custom-palette",help="JSON filament library for --palette-source custom")
+    parser.add_argument("--quality-bias",type=int,default=DEFAULT_QUALITY_BIAS,
+                        help="Quality versus waste priority from 0 (fewer mixes) to 100 (more detail)")
+    parser.add_argument("--mix-model",choices=MIX_MODELS,default="perceptual",
+                        help="Planning-only predicted mixed-color model")
+    parser.add_argument("--analysis-dir",help="Optional local destination for heatmap and anchor-influence preview meshes")
+    parser.add_argument("--texture",help="PNG/JPEG texture override used with experimental OBJ import")
+    parser.add_argument("--internal-colors",type=int,default=48,
+                        help="Experimental OBJ analysis color count before Bambu-compatible compression")
     parser.add_argument("--output-dir")
     parser.add_argument("--json",action="store_true",dest="json_output")
     parser.add_argument("--no-reveal",action="store_true")
@@ -1440,7 +2186,9 @@ def main():
             if not infile or not infile.exists():
                 print("No file selected",file=sys.stderr); return 2
             if args.inspect:
-                result=inspect_project(infile,args.thumbnail_out,args.preview_mesh_out)
+                reporter=(lambda fraction,message: print(json.dumps({"progress":fraction,"message":message}),
+                                                           file=sys.stderr,flush=True)) if args.json_output else (lambda fraction,message: None)
+                result=inspect_project(infile,args.thumbnail_out,args.preview_mesh_out,args.mix_model,args.texture,reporter)
             else:
                 if args.mode:
                     mode=args.mode
@@ -1464,6 +2212,11 @@ def main():
                     real_slots=args.real_slots,
                     reference=args.reference,
                     custom_catalog_path=args.custom_palette,
+                    quality_bias=args.quality_bias,
+                    mix_model=args.mix_model,
+                    analysis_dir=args.analysis_dir,
+                    texture_override=args.texture,
+                    internal_colors=args.internal_colors,
                     progress=reporter,
                 )
         if args.json_output:

@@ -26,6 +26,9 @@ struct InventoryCard: View {
             }
 
             if let inventory = store.inventory {
+                TextField("Search owned filament names or colors", text: $store.inventorySearch)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
                 HStack(spacing: 20) {
                     InventoryStat(value: "\(inventory.usableCount)", label: "Active PLA spools")
                     InventoryStat(
@@ -36,17 +39,29 @@ struct InventoryCard: View {
                 }
 
                 HStack(spacing: 4) {
-                    ForEach(Array(inventory.spools.prefix(18))) { spool in
+                    ForEach(Array(filteredSpools(inventory).prefix(18))) { spool in
                         RoundedRectangle(cornerRadius: 3, style: .continuous)
                             .fill(Color(hex: spool.color))
                             .frame(height: 13)
                     }
-                    if inventory.spools.count > 18 {
-                        Text("+\(inventory.spools.count - 18)")
+                    if filteredSpools(inventory).count > 18 {
+                        Text("+\(filteredSpools(inventory).count - 18)")
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.white.opacity(0.45))
                             .padding(.leading, 4)
                     }
+                }
+
+                ForEach(Array(filteredSpools(inventory).prefix(3))) { spool in
+                    HStack(spacing: 7) {
+                        Circle().fill(Color(hex: spool.color)).frame(width: 10, height: 10)
+                        Text(spool.name)
+                        Spacer()
+                        Text("\(Int(spool.remainingGrams)) g owned")
+                            .monospacedDigit()
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.62))
                 }
 
                 Text(sourceFootnote)
@@ -77,6 +92,15 @@ struct InventoryCard: View {
             return "Custom brand libraries are local JSON data; verify printer profiles and physical colors before printing."
         case .exactCMYKW:
             return "Exact CMYKW uses true anchor colors. Load matching physical filaments before printing."
+        }
+    }
+
+    private func filteredSpools(_ inventory: InventorySnapshot) -> [InventorySpool] {
+        guard !store.inventorySearch.isEmpty else { return inventory.spools }
+        return inventory.spools.filter {
+            $0.name.localizedCaseInsensitiveContains(store.inventorySearch)
+            || $0.color.localizedCaseInsensitiveContains(store.inventorySearch)
+            || $0.brand.localizedCaseInsensitiveContains(store.inventorySearch)
         }
     }
 }

@@ -1,5 +1,8 @@
 # FullSpectrum Studio 0.3 Community Preview
 
+This document describes the historical 0.3 release. See
+[0.4 Release Notes](RELEASE_NOTES_0.4.md) for current support and limits.
+
 ## Major Changes
 
 - Preserves Bambu painted facets through decoded `paint_color` serialized state

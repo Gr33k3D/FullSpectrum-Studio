@@ -17,12 +17,12 @@ struct FullSpectrumStudioApp: App {
         WindowGroup("FullSpectrum Studio", id: "main") {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 1080, minHeight: 720)
+                .frame(minWidth: 820, minHeight: 640)
         }
         .defaultSize(width: 1240, height: 790)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Open 3MF Project...") {
+                Button("Open Painted 3MF or Textured OBJ/GLB...") {
                     store.showingImporter = true
                 }
                 .keyboardShortcut("o")

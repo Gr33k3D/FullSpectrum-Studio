@@ -1,5 +1,5 @@
 #define MyAppName "FullSpectrum Studio"
-#define MyAppVersion "0.3.0"
+#define MyAppVersion "0.4.0"
 #define MyAppPublisher "FullSpectrum Studio contributors"
 #define MyAppExeName "FullSpectrumStudio.exe"
 

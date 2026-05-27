@@ -4,36 +4,54 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject private var store: StudioStore
 
-    private var threeMFType: UTType {
-        UTType(filenameExtension: "3mf") ?? .data
+    private var sourceTypes: [UTType] {
+        ["3mf", "obj", "glb"].map { UTType(filenameExtension: $0) ?? .data }
     }
     private var referenceTypes: [UTType] {
         ["obj", "glb", "png", "jpg", "jpeg", "bmp", "tif"].map { UTType(filenameExtension: $0) ?? .data }
+    }
+    private var textureTypes: [UTType] {
+        ["png", "jpg", "jpeg"].map { UTType(filenameExtension: $0) ?? .image }
     }
 
     var body: some View {
         ZStack {
             StudioBackground()
 
-            VStack(spacing: 20) {
-                HeaderView()
+            ScrollView {
+                VStack(spacing: 20) {
+                    HeaderView()
 
-                HStack(alignment: .top, spacing: 20) {
-                    ModelPreviewCard()
-                        .frame(minWidth: 420, idealWidth: 475, maxWidth: 510)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .top, spacing: 20) {
+                            ModelPreviewCard()
+                                .frame(minWidth: 400, idealWidth: 500, maxWidth: 570)
 
-                    VStack(spacing: 16) {
-                        ConversionControlsCard()
-                        InventoryCard()
-                        PaletteResultsCard()
+                            VStack(spacing: 16) {
+                                ConversionControlsCard()
+                                InventoryCard()
+                                PaletteResultsCard()
+                                    .frame(minHeight: 300)
+                            }
+                            .frame(minWidth: 400)
+                        }
+
+                        VStack(spacing: 16) {
+                            ModelPreviewCard()
+                                .frame(minHeight: 500)
+                            ConversionControlsCard()
+                            InventoryCard()
+                            PaletteResultsCard()
+                                .frame(minHeight: 390)
+                        }
                     }
                 }
+                .padding(24)
             }
-            .padding(24)
         }
         .fileImporter(
             isPresented: $store.showingImporter,
-            allowedContentTypes: [threeMFType],
+            allowedContentTypes: sourceTypes,
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
@@ -56,6 +74,15 @@ struct ContentView: View {
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
                 store.acceptCustomPalette(url: url)
+            }
+        }
+        .fileImporter(
+            isPresented: $store.showingTextureImporter,
+            allowedContentTypes: textureTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                store.acceptTextureOverride(url: url)
             }
         }
         .onOpenURL { url in
@@ -138,7 +165,7 @@ private struct HeaderView: View {
             Button {
                 store.showingImporter = true
             } label: {
-                Label("Open 3MF", systemImage: "plus")
+                Label("Open Source", systemImage: "plus")
             }
             .buttonStyle(StudioButtonStyle(prominent: false))
 

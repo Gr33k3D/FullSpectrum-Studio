@@ -5,10 +5,13 @@ import SwiftUI
 struct InteractiveModelView: NSViewRepresentable {
     let meshURL: URL
     let resetToken: Int
+    let wireframe: Bool
+    let performance: ViewerPerformance
 
     final class Coordinator {
         var meshURL: URL?
         var resetToken = -1
+        var wireframe = false
         var homeTransform: SCNMatrix4?
         var target = SCNVector3Zero
     }
@@ -34,6 +37,28 @@ struct InteractiveModelView: NSViewRepresentable {
             loadScene(in: view, coordinator: context.coordinator)
             context.coordinator.meshURL = meshURL
         }
+        switch performance {
+        case .fast:
+            view.preferredFramesPerSecond = 24
+            view.antialiasingMode = .none
+        case .balanced:
+            view.preferredFramesPerSecond = 30
+            view.antialiasingMode = .multisampling2X
+        case .high:
+            view.preferredFramesPerSecond = 45
+            view.antialiasingMode = .multisampling4X
+        case .maximum:
+            view.preferredFramesPerSecond = 60
+            view.antialiasingMode = .multisampling4X
+        }
+        if context.coordinator.wireframe != wireframe {
+            view.scene?.rootNode.enumerateChildNodes { node, _ in
+                node.geometry?.materials.forEach { material in
+                    material.fillMode = wireframe ? .lines : .fill
+                }
+            }
+            context.coordinator.wireframe = wireframe
+        }
         if context.coordinator.resetToken != resetToken {
             resetCamera(in: view, coordinator: context.coordinator, animated: true)
             context.coordinator.resetToken = resetToken
@@ -51,6 +76,7 @@ struct InteractiveModelView: NSViewRepresentable {
                 material.roughness.contents = 0.72
                 material.metalness.contents = 0.0
                 material.isDoubleSided = true
+                material.fillMode = wireframe ? .lines : .fill
             }
         }
 
@@ -99,6 +125,7 @@ struct InteractiveModelView: NSViewRepresentable {
         view.defaultCameraController.target = center
         coordinator.target = center
         coordinator.homeTransform = cameraNode.transform
+        coordinator.wireframe = wireframe
     }
 
     private func resetCamera(in view: SCNView, coordinator: Coordinator, animated: Bool) {

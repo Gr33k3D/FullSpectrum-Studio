@@ -26,15 +26,38 @@ struct PaletteResultsCard: View {
                 HStack(spacing: 18) {
                     MetricChip(title: "QUALITY", value: String(format: "%.0f / 100", result.quality.qualityScore))
                     MetricChip(title: "MEAN ERROR", value: String(format: "dE %.1f", result.quality.estimatedDeltaE))
+                    MetricChip(title: "CONFIDENCE", value: String(format: "%.0f / 100", result.quality.confidenceScore))
+                }
+                HStack(spacing: 18) {
                     if let referenceScore = result.quality.referenceSimilarityScore {
                         MetricChip(title: "REFERENCE", value: String(format: "%.0f / 100", referenceScore))
                     }
+                    if let contrast = result.quality.contrastRetention {
+                        MetricChip(title: "CONTRAST", value: String(format: "%.0f%%", contrast))
+                    }
+                    MetricChip(title: "MIXED PAINT", value: String(format: "%.0f%%", result.printability.paintedMixedShare))
                 }
 
-                if result.preservation.geometryPreserved && result.preservation.textureResourcesPreserved {
-                    Label("Geometry, UV meaning and texture resources verified unchanged", systemImage: "checkmark.shield")
+                if result.preservation.geometryPreserved && result.preservation.textureResourcesPreserved && result.preservation.paintRemapVerified {
+                    Label("Geometry, UV, textures and decoded paint remap verified", systemImage: "checkmark.shield")
                         .font(.caption)
                         .foregroundStyle(.green.opacity(0.84))
+                }
+                Label("\(result.printability.difficulty) printability complexity; actual time and material require slicing", systemImage: "printer")
+                    .font(.caption)
+                    .foregroundStyle(.cyan.opacity(0.76))
+                ForEach(result.printability.recommendations, id: \.self) { recommendation in
+                    Text("Suggestion: \(recommendation)")
+                        .font(.caption)
+                        .foregroundStyle(.cyan.opacity(0.76))
+                }
+                if let next = result.recommendation {
+                    HStack(spacing: 8) {
+                        Circle().fill(Color(hex: next.color)).frame(width: 14, height: 14)
+                        Text("Next anchor: \(next.name) could reduce estimated error by \(String(format: "%.1f", next.estimatedDeltaEReduction)) dE")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.cyan.opacity(0.84))
                 }
                 ForEach(result.warnings, id: \.self) { warning in
                     Text(warning)
@@ -57,9 +80,14 @@ struct PaletteResultsCard: View {
                 ScrollView {
                     LazyVStack(spacing: 7) {
                         ForEach(result.mixedRecipes) { recipe in
-                            RecipeRow(recipe: recipe)
+                            RecipeRow(recipe: recipe, anchors: result.anchors)
                         }
                     }
+                }
+                if result.import != nil {
+                    Text("Experimental source import was converted through the same paint and preservation validator.")
+                        .font(.caption2)
+                        .foregroundStyle(.orange.opacity(0.8))
                 }
             } else {
                 EmptyResultsPanel()
@@ -119,17 +147,25 @@ private struct AnchorGrid: View {
 
     private func secondaryText(for anchor: AnchorFilament) -> String {
         if let grams = anchor.remainingGrams {
-            return "\(anchor.filamentID)  \(Int(grams)) g left"
+            return "\(anchor.color)  \(Int(grams)) g left"
         }
         if paletteSource == PaletteSource.exactCMYKW.rawValue {
-            return "\(anchor.filamentID)  load physical match"
+            return "\(anchor.color)  load physical match"
         }
-        return "\(anchor.filamentID)  catalog"
+        return "\(anchor.color)  catalog"
     }
 }
 
 private struct RecipeRow: View {
     let recipe: RecipeItem
+    let anchors: [AnchorFilament]
+
+    private var componentNames: String {
+        recipe.components.split(separator: ",").compactMap { value -> String? in
+            guard let slot = Int(value), slot > 0, slot <= anchors.count else { return nil }
+            return anchors[slot - 1].name
+        }.joined(separator: " + ")
+    }
 
     var body: some View {
         HStack(spacing: 9) {
@@ -140,9 +176,10 @@ private struct RecipeRow: View {
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.white.opacity(0.6))
                 .frame(width: 23, alignment: .leading)
-            Text(recipe.components.replacingOccurrences(of: ",", with: " + "))
-                .font(.caption.monospaced())
+            Text(componentNames.isEmpty ? recipe.label : componentNames)
+                .font(.caption)
                 .foregroundStyle(.white.opacity(0.86))
+                .lineLimit(1)
             Text(recipe.ratios)
                 .font(.caption2.monospaced())
                 .foregroundStyle(.white.opacity(0.46))
@@ -156,6 +193,11 @@ private struct RecipeRow: View {
                 Text(String(format: "dE %.1f", recipe.deltaE))
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.48))
+                if recipe.visualGain > 0 {
+                    Text(String(format: "+%.1f gain", recipe.visualGain))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.green.opacity(0.72))
+                }
             }
         }
         .padding(.horizontal, 9)

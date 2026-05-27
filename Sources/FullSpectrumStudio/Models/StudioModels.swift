@@ -63,6 +63,38 @@ enum RealSlotSelection: String, CaseIterable, Identifiable {
     var title: String { self == .auto ? "Auto 2-6" : rawValue }
 }
 
+enum MixPrediction: String, CaseIterable, Identifiable {
+    case perceptual
+    case opticalScreen = "optical-screen"
+
+    var id: Self { self }
+    var title: String { self == .perceptual ? "Conservative" : "Optical Screen (Experimental)" }
+    var explanation: String {
+        self == .perceptual
+        ? "Perceptual planning estimate; verify real mixed colors with a test print."
+        : "Uncalibrated optical-screen estimate for experimentation only."
+    }
+}
+
+enum PreviewMode: String, CaseIterable, Identifiable {
+    case original = "Original"
+    case predicted = "Reduced / predicted"
+    case colorLoss = "Heatmap"
+    case anchorInfluence = "Anchor influence"
+    case wireframe = "Wireframe"
+
+    var id: Self { self }
+}
+
+enum ViewerPerformance: String, CaseIterable, Identifiable {
+    case fast = "Fast"
+    case balanced = "Balanced"
+    case high = "High"
+    case maximum = "Maximum"
+
+    var id: Self { self }
+}
+
 struct InventorySnapshot: Decodable {
     let source: String?
     let allCount: Int
@@ -91,6 +123,19 @@ struct ProjectInspection: Decodable {
     let sourceColors: [String]
     let thumbnail: String?
     let previewMesh: String?
+    let metrics: MeshMetrics?
+    let `import`: ImportSummary?
+}
+
+struct MeshMetrics: Decodable {
+    let objectCount: Int
+    let vertexCount: Int
+    let triangleCount: Int
+    let polygonCount: Int
+    let textureBytes: Int
+    let recommendedRenderMode: String
+    let previewMemoryEstimateBytes: Int
+    let previewBuildEstimateSeconds: Double
 }
 
 struct ConversionResult: Decodable {
@@ -109,8 +154,12 @@ struct ConversionResult: Decodable {
     let anchors: [AnchorFilament]
     let recipes: [RecipeItem]
     let quality: QualityMetrics
+    let printability: PrintabilityMetrics
     let preservation: PreservationResult
     let reference: ReferenceSummary?
+    let analysisAssets: AnalysisAssets?
+    let `import`: ImportSummary?
+    let recommendation: AnchorRecommendation?
     let warnings: [String]
 
     var mixedRecipes: [RecipeItem] {
@@ -124,12 +173,55 @@ struct QualityMetrics: Decodable {
     let qualityScore: Double
     let referenceSimilarityScore: Double?
     let referenceEstimatedDeltaE: Double?
+    let confidenceScore: Double
+    let confidenceLabel: String
+    let brightnessError: Double?
+    let contrastRetention: Double?
+    let mixModel: String
+}
+
+struct PrintabilityMetrics: Decodable {
+    let physicalSlots: Int
+    let mixedSlots: Int
+    let paintedMixedShare: Double
+    let purgeTransitionMean: Double?
+    let difficulty: String
+    let swapRisk: String
+    let filamentUsageEstimate: Double?
+    let printTimeEstimate: Double?
+    let sliceRequiredForTimeAndUsage: Bool
+    let recommendations: [String]
 }
 
 struct PreservationResult: Decodable {
     let geometryPreserved: Bool
     let textureResourcesPreserved: Bool
     let checkedMembers: Int
+    let paintRemapVerified: Bool
+}
+
+struct AnalysisAssets: Decodable {
+    let heatmapMesh: String?
+    let anchorInfluenceMesh: String?
+}
+
+struct ImportSummary: Decodable {
+    let sourceType: String
+    let texture: String
+    let vertexCount: Int
+    let triangleCount: Int
+    let internalColorCount: Int
+    let exportColorCount: Int
+    let compressedForBambu: Bool
+}
+
+struct AnchorRecommendation: Decodable {
+    let name: String
+    let color: String
+    let estimatedDeltaEReduction: Double
+    let estimatedQualityScore: Double
+    let estimatedMixedSlots: Int
+    let availability: String
 }
 
 struct ReferenceSummary: Decodable {
@@ -166,6 +258,8 @@ struct RecipeItem: Decodable, Identifiable {
     let ratios: String
     let preview: String
     let deltaE: Double
+    let directDeltaE: Double
+    let visualGain: Double
     let availableGrams: Double?
 
     var id: Int { oldSlot }

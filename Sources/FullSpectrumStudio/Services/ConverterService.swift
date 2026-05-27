@@ -50,24 +50,41 @@ struct ConverterService {
         )
     }
 
-    func inspect(file: URL, thumbnailURL: URL) async throws -> ProjectInspection {
-        try await execute(
-            arguments: [
+    func inspect(
+        file: URL,
+        thumbnailURL: URL,
+        previewMeshURL: URL,
+        textureOverride: URL? = nil,
+        progress: @escaping @Sendable (Double, String) -> Void
+    ) async throws -> ProjectInspection {
+        var arguments = [
                 "--inspect", "--json",
                 "--thumbnail-out", thumbnailURL.path,
+                "--preview-mesh-out", previewMeshURL.path,
                 file.path
-            ],
-            type: ProjectInspection.self
+            ]
+        if let textureOverride {
+            arguments.insert(contentsOf: ["--texture", textureOverride.path], at: arguments.count - 1)
+        }
+        return try await execute(
+            arguments: arguments,
+            type: ProjectInspection.self,
+            progress: progress
         )
     }
 
-    func previewMesh(file: URL, outputURL: URL) async throws -> ProjectInspection {
-        try await execute(
-            arguments: [
+    func previewMesh(file: URL, outputURL: URL, mixPrediction: MixPrediction = .perceptual, textureOverride: URL? = nil) async throws -> ProjectInspection {
+        var arguments = [
                 "--inspect", "--json",
                 "--preview-mesh-out", outputURL.path,
+                "--mix-model", mixPrediction.rawValue,
                 file.path
-            ],
+            ]
+        if let textureOverride {
+            arguments.insert(contentsOf: ["--texture", textureOverride.path], at: arguments.count - 1)
+        }
+        return try await execute(
+            arguments: arguments,
             type: ProjectInspection.self
         )
     }
@@ -79,14 +96,22 @@ struct ConverterService {
         realSlots: RealSlotSelection,
         reference: URL?,
         customPalette: URL?,
+        textureOverride: URL?,
+        qualityBias: Int,
+        mixPrediction: MixPrediction,
         outputDirectory: URL,
         progress: @escaping @Sendable (Double, String) -> Void
     ) async throws -> ConversionResult {
+        let analysisDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FullSpectrum-Analysis-\(UUID().uuidString)", isDirectory: true)
         var arguments = [
                 "--json",
                 "--mode", mode.rawValue,
                 "--palette-source", paletteSource.rawValue,
                 "--real-slots", realSlots.rawValue,
+                "--quality-bias", String(qualityBias),
+                "--mix-model", mixPrediction.rawValue,
+                "--analysis-dir", analysisDirectory.path,
                 "--output-dir", outputDirectory.path,
                 "--no-reveal",
                 file.path
@@ -96,6 +121,9 @@ struct ConverterService {
         }
         if let customPalette {
             arguments.insert(contentsOf: ["--custom-palette", customPalette.path], at: arguments.count - 1)
+        }
+        if let textureOverride {
+            arguments.insert(contentsOf: ["--texture", textureOverride.path], at: arguments.count - 1)
         }
         return try await execute(
             arguments: arguments,
@@ -109,7 +137,7 @@ struct ConverterService {
         type: T.Type,
         progress: (@Sendable (Double, String) -> Void)? = nil
     ) async throws -> T {
-        try await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) {
             guard let engine = Bundle.main.url(forResource: "FullSpectrumEngine", withExtension: "py") else {
                 throw ConverterError.engineMissing
             }
@@ -130,8 +158,15 @@ struct ConverterService {
                 events.forEach { progress?($0.progress, $0.message) }
             }
 
+            try Task.checkCancellation()
             try process.run()
-            process.waitUntilExit()
+            while process.isRunning {
+                if Task.isCancelled {
+                    process.terminate()
+                    throw CancellationError()
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
             stderr.fileHandleForReading.readabilityHandler = nil
 
             let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
@@ -150,6 +185,11 @@ struct ConverterService {
                 let diagnostics = String(data: diagnosticsData, encoding: .utf8) ?? ""
                 throw ConverterError.processFailure("Could not read converter output. \(diagnostics)")
             }
-        }.value
+        }
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 }

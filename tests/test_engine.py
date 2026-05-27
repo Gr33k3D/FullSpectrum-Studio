@@ -4,6 +4,7 @@ import struct
 import tempfile
 import unittest
 import zipfile
+import zlib
 from pathlib import Path
 
 
@@ -53,6 +54,68 @@ def write_bmp(path, color=(210, 180, 140)):
     dib = struct.pack("<IIIHHIIIIII", 40, 2, 2, 1, 24, 0, len(data), 0, 0, 0, 0)
     path.write_bytes(header + dib + data)
 
+def write_png(path, pixels, width, height):
+    raw=b"".join(b"\x00"+b"".join(bytes((*pixel,255)) for pixel in pixels[row*width:(row+1)*width])
+                 for row in range(height))
+    def chunk(kind, data):
+        return struct.pack(">I",len(data))+kind+data+struct.pack(">I",zlib.crc32(kind+data)&0xffffffff)
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        +chunk(b"IHDR",struct.pack(">IIBBBBB",width,height,8,6,0,0,0))
+        +chunk(b"IDAT",zlib.compress(raw))
+        +chunk(b"IEND",b"")
+    )
+
+def write_textured_obj(folder):
+    texture=folder/"texture.png"
+    write_png(texture,[(235,30,45),(25,100,230),(240,200,30),(35,185,90)],2,2)
+    (folder/"sample.mtl").write_text("newmtl paint\nmap_Kd texture.png\n")
+    model=folder/"sample.obj"
+    model.write_text(
+        "mtllib sample.mtl\n"
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+        "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+        "usemtl paint\nf 1/1 2/2 3/3\nf 1/1 3/3 4/4\n"
+    )
+    return model
+
+def write_textured_glb(folder):
+    texture=folder/"embedded.png"
+    write_png(texture,[(210,40,45),(210,40,45),(210,40,45),(210,40,45)],2,2)
+    image=texture.read_bytes()
+    positions=struct.pack("<9f",0,0,0,1,0,0,0,1,0)
+    uvs=struct.pack("<6f",0,0,1,0,0,1)
+    indices=struct.pack("<3H",0,1,2)
+    padding=b"\0\0"
+    binary=positions+uvs+indices+padding+image
+    document={
+        "asset":{"version":"2.0"},
+        "scene":0,
+        "scenes":[{"nodes":[0]}],
+        "nodes":[{"mesh":0,"translation":[2,0,0]}],
+        "meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"indices":2}]}],
+        "accessors":[
+            {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+            {"bufferView":1,"componentType":5126,"count":3,"type":"VEC2"},
+            {"bufferView":2,"componentType":5123,"count":3,"type":"SCALAR"},
+        ],
+        "bufferViews":[
+            {"buffer":0,"byteOffset":0,"byteLength":len(positions)},
+            {"buffer":0,"byteOffset":len(positions),"byteLength":len(uvs)},
+            {"buffer":0,"byteOffset":len(positions)+len(uvs),"byteLength":len(indices)},
+            {"buffer":0,"byteOffset":len(positions)+len(uvs)+len(indices)+len(padding),"byteLength":len(image)},
+        ],
+        "images":[{"bufferView":3,"mimeType":"image/png"}],
+        "buffers":[{"byteLength":len(binary)}],
+    }
+    encoded=json.dumps(document,separators=(",",":")).encode()
+    encoded+=b" " * ((4-len(encoded)%4)%4)
+    binary+=b"\0" * ((4-len(binary)%4)%4)
+    total=12+8+len(encoded)+8+len(binary)
+    glb=folder/"sample.glb"
+    glb.write_bytes(b"glTF"+struct.pack("<II",2,total)+struct.pack("<II",len(encoded),0x4E4F534A)+encoded+struct.pack("<II",len(binary),0x004E4942)+binary)
+    return glb
+
 
 class PaintCodecTests(unittest.TestCase):
     def test_known_bambu_leaf_states_are_slots_not_first_use_values(self):
@@ -67,6 +130,10 @@ class PaintCodecTests(unittest.TestCase):
         )
         self.assertEqual(referenced, [4])
         self.assertEqual(mapped, "8")
+
+    def test_ciede2000_uses_standard_reference_pair(self):
+        difference = ENGINE.delta_e_2000((50, 2.6772, -79.7751), (50, 0, -82.7485))
+        self.assertAlmostEqual(difference, 2.0425, places=3)
 
 
 class ArchiveSafetyTests(unittest.TestCase):
@@ -97,6 +164,29 @@ class ArchiveSafetyTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "Duplicate path"):
                     ENGINE.safe_extract_archive(archive, Path(folder) / "extract2")
 
+    def test_glb_declared_oversize_rejects_before_geometry_decode(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder=Path(folder_name)
+            source=write_textured_glb(folder)
+            data=source.read_bytes()
+            json_length=struct.unpack_from("<I",data,12)[0]
+            document=json.loads(data[20:20+json_length].decode("utf-8"))
+            document["accessors"][2]["count"]=(ENGINE.MAX_IMPORT_FACES+1)*3
+            encoded=json.dumps(document,separators=(",",":")).encode()
+            encoded+=b" " * ((4-len(encoded)%4)%4)
+            bin_header=20+json_length
+            old_binary_length=struct.unpack_from("<I",data,bin_header)[0]
+            binary=data[bin_header+8:bin_header+8+old_binary_length]
+            total=12+8+len(encoded)+8+len(binary)
+            oversized=folder/"oversized.glb"
+            oversized.write_bytes(
+                b"glTF"+struct.pack("<II",2,total)
+                +struct.pack("<II",len(encoded),0x4E4F534A)+encoded
+                +struct.pack("<II",len(binary),0x004E4942)+binary
+            )
+            with self.assertRaisesRegex(RuntimeError,"face import safety limit"):
+                ENGINE.import_glb_project(oversized,folder/"out.3mf",folder)
+
 
 class ConversionTests(unittest.TestCase):
     def test_dynamic_physical_slots_and_preservation_validation(self):
@@ -114,6 +204,10 @@ class ConversionTests(unittest.TestCase):
             self.assertEqual(output["realSlots"], 2)
             self.assertTrue(output["preservation"]["geometryPreserved"])
             self.assertTrue(output["preservation"]["textureResourcesPreserved"])
+            self.assertTrue(output["preservation"]["paintRemapVerified"])
+            self.assertIn("confidenceScore",output["quality"])
+            self.assertIn("contrastRetention",output["quality"])
+            self.assertTrue(output["printability"]["sliceRequiredForTimeAndUsage"])
             with zipfile.ZipFile(output["output"]) as archive:
                 generated = json.loads(archive.read("Metadata/project_settings.config"))
                 total = output["outputSlots"]
@@ -156,6 +250,82 @@ class ConversionTests(unittest.TestCase):
             )
             self.assertEqual(output["reference"]["kind"], "Texture image")
             self.assertIn("referenceSimilarityScore", output["quality"])
+
+    def test_shareable_report_does_not_repeat_reference_filename(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            reference = Path(folder) / "private-reference-name.bmp"
+            write_project(source)
+            write_bmp(reference)
+            output = ENGINE.convert(
+                source, "official", "catalog", folder, False, "3", reference=reference
+            )
+            report = Path(output["report"]).read_text()
+            self.assertIn("Reference type: Texture image", report)
+            self.assertNotIn(reference.name, report)
+
+    def test_analysis_meshes_are_emitted_for_loss_and_anchor_influence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            write_project(source)
+            output = ENGINE.convert(source, "official", "catalog", folder, False, "2",
+                                    analysis_dir=Path(folder)/"analysis")
+            heatmap = Path(output["analysisAssets"]["heatmapMesh"])
+            influence = Path(output["analysisAssets"]["anchorInfluenceMesh"])
+            self.assertTrue(heatmap.exists())
+            self.assertTrue(influence.exists())
+            heat_geometry = "\n".join(line for line in heatmap.read_text().splitlines()
+                                      if not line.startswith("mtllib "))
+            influence_geometry = "\n".join(line for line in influence.read_text().splitlines()
+                                           if not line.startswith("mtllib "))
+            self.assertEqual(heat_geometry, influence_geometry)
+
+    def test_reuses_equal_mix_recipe_instead_of_creating_duplicate_slots(self):
+        anchors=[
+            {"name":"Black","color":"#000000"},
+            {"name":"White","color":"#FFFFFF"},
+        ]
+        palette=ENGINE.build_palette(["#777777","#777777"],anchors,{1:100,2:100},100)
+        self.assertEqual(len(palette[0]),3)
+        self.assertEqual(palette[4][1],palette[4][2])
+
+    def test_textured_obj_import_runs_through_validated_output(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder=Path(folder_name)
+            source=write_textured_obj(folder)
+            output=ENGINE.convert(source,"official","catalog",folder,False,"2",internal_colors=40)
+            self.assertEqual(output["import"]["sourceType"],"Textured OBJ")
+            self.assertTrue(output["preservation"]["paintRemapVerified"])
+            with zipfile.ZipFile(output["output"]) as archive:
+                self.assertIn("3D/Textures/source_texture.png",archive.namelist())
+            preview=ENGINE.inspect_project(source,preview_mesh_dest=folder/"preview.obj")
+            self.assertEqual(preview["filename"],"sample.obj")
+            self.assertTrue(Path(preview["previewMesh"]).exists())
+
+    def test_textured_glb_import_runs_through_validated_output(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder=Path(folder_name)
+            source=write_textured_glb(folder)
+            output=ENGINE.convert(source,"official","catalog",folder,False,"2")
+            self.assertEqual(output["import"]["sourceType"],"Textured GLB")
+            self.assertTrue(output["preservation"]["paintRemapVerified"])
+            preview=ENGINE.inspect_project(source,preview_mesh_dest=folder/"glb-preview.obj")
+            self.assertEqual(preview["filename"],"sample.glb")
+
+    def test_texture_without_geometry_is_rejected_as_direct_input(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder=Path(folder_name)
+            image=folder/"texture.png"
+            write_png(image,[(0,0,0)],1,1)
+            with self.assertRaisesRegex(RuntimeError,"no printable geometry"):
+                ENGINE.convert(image,"official","catalog",folder,False,"2")
+
+    def test_practical_bias_never_creates_more_mixes_than_detail_bias(self):
+        anchors=[{"name":"Black","color":"#000000"},{"name":"White","color":"#FFFFFF"}]
+        colors=["#303030","#606060","#909090","#C0C0C0"]
+        practical=ENGINE.build_palette(colors,anchors,{i:100 for i in range(1,5)},0)
+        detail=ENGINE.build_palette(colors,anchors,{i:100 for i in range(1,5)},100)
+        self.assertLessEqual(len(practical[0]),len(detail[0]))
 
     def test_validator_rejects_mixed_component_that_is_not_physical(self):
         obj = settings(3)

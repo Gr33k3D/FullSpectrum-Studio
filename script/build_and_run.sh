@@ -29,6 +29,8 @@ cp "$BUILD_BINARY" "$APP_BINARY"
 cp "$ROOT_DIR/fullspectrum_engine.py" "$APP_RESOURCES/FullSpectrumEngine.py"
 cp "$ROOT_DIR/LICENSE" "$APP_RESOURCES/LICENSE"
 chmod +x "$APP_BINARY" "$APP_RESOURCES/FullSpectrumEngine.py"
+# Prevent local compiler path/debug symbols from travelling in a shared app ZIP.
+/usr/bin/strip -S -x "$APP_BINARY"
 
 cat >"$INFO_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -46,9 +48,9 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.3.0</string>
+  <string>0.4.0</string>
   <key>CFBundleVersion</key>
-  <string>3</string>
+  <string>4</string>
   <key>CFBundleGetInfoString</key>
   <string>Community Preview - validated local reduced-filament workflow</string>
   <key>LSMinimumSystemVersion</key>
@@ -63,9 +65,11 @@ cat >"$INFO_PLIST" <<PLIST
       <key>CFBundleTypeExtensions</key>
       <array>
         <string>3mf</string>
+        <string>obj</string>
+        <string>glb</string>
       </array>
       <key>CFBundleTypeName</key>
-      <string>Bambu 3MF Project</string>
+      <string>Painted 3MF or Textured OBJ/GLB Source</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
     </dict>
