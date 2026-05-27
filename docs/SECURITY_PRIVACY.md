@@ -7,8 +7,8 @@ projects, references or Bambu inventory.
 
 Inventory mode reads the local Bambu Studio Beta `spools.json` file in
 read-only mode. Only display-safe color, material and quantity fields are used
-inside the app. Device bindings, tag IDs, spool IDs and local paths are not
-written to recipe or validation reports.
+inside the local app. Device bindings, tag IDs, spool IDs, quantities and
+local paths are not written to generated shareable text reports.
 
 ## File Handling
 
@@ -18,7 +18,8 @@ written to recipe or validation reports.
 - GLB embedded images are extracted only to temporary local storage and removed
   after analysis.
 - Packaged macOS executables are stripped of local build-path/debug symbols
-  before a release archive is made.
+  before a release archive is made, then the completed app bundle is ad-hoc
+  signed and strictly verified. The community preview is not notarized.
 - Experimental OBJ/GLB import embeds only the selected model texture in its local
   output project. Users should confirm that texture artwork is appropriate to
   share before publishing generated files.

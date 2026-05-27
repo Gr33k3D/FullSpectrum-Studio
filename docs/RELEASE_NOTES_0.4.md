@@ -1,5 +1,9 @@
 # FullSpectrum Studio 0.4 Community Preview
 
+> Historical note: the optical-screen experiment described below was removed
+> in v0.4.3. Current builds use Bambu-compatible loaded-swatch reconstruction
+> as the only mixed-color prediction path.
+
 ## Direction
 
 FullSpectrum remains a converter for painted projects: it reduces a physical

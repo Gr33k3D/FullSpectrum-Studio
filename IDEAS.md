@@ -10,14 +10,16 @@ painted project meaning while producing a practical, validated output.
   paint usage.
 - Quality-versus-waste control that suppresses weak mixed colors.
 - Reuse of identical mixed recipes to avoid duplicate logical slots.
-- Conservative default prediction plus opt-in, explicitly uncalibrated optical
-  screen estimate.
+- Bambu-compatible loaded-swatch prediction shared by planning, export
+  validation and preview; the earlier optical-screen experiment was removed.
 - Confidence, brightness-error, contrast-retention and pre-slice printability
   indicators.
 - Color-loss and anchor-influence analysis meshes for the native viewer.
 - Experimental textured OBJ/GLB import with UV/texture embedding, deterministic
   color clustering and compression warnings at the Bambu paint-color limit.
 - Exact expected-versus-written paint-state validation after archive reopen.
+- Reliable-match gating that refuses mixed targets outside Delta E `8`.
+- Sampled optimized large-model preview and analysis overlays.
 
 ## Valuable Next Experiments
 

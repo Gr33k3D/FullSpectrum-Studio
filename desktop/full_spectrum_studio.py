@@ -3,6 +3,7 @@
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -37,9 +38,10 @@ class StudioApp(tk.Tk):
         self.strategy = tk.StringVar(value="official")
         self.source = tk.StringVar(value="inventory")
         self.real_slots = tk.StringVar(value="auto")
-        self.mix_model = tk.StringVar(value="perceptual")
+        self.mix_model = tk.StringVar(value="bambu")
         self.quality_bias = tk.IntVar(value=60)
         self.auto_open = tk.BooleanVar(value=True)
+        self.output_application = tk.StringVar(value="Bambu Studio")
         self.progress = tk.DoubleVar(value=0)
         self.status = tk.StringVar(value="Choose a painted .3mf or textured OBJ / GLB source to begin.")
         self._build()
@@ -73,8 +75,16 @@ class StudioApp(tk.Tk):
         self.combo(choices, "Strategy", self.strategy, ["official", "cmykw"], 0)
         self.combo(choices, "Filaments", self.source, ["inventory", "catalog", "all-bambu", "custom", "exact-cmykw"], 1)
         self.combo(choices, "Physical slots", self.real_slots, ["auto", "2", "3", "4", "5", "6"], 2)
-        self.combo(choices, "Prediction", self.mix_model, ["perceptual", "optical-screen"], 3)
-        ttk.Checkbutton(choices, text="Open validated output", variable=self.auto_open).grid(row=1, column=4, padx=(24, 0), sticky="w")
+        ttk.Label(choices, text="Prediction").grid(row=0, column=3, sticky="w", padx=(0, 20))
+        ttk.Label(choices, text="Bambu reconstruction", style="Small.TLabel").grid(row=1, column=3, sticky="w", padx=(0, 20), pady=4)
+        handoff = ttk.Frame(frame)
+        handoff.pack(fill="x", pady=(0, 12))
+        ttk.Checkbutton(handoff, text="Open validated output in", variable=self.auto_open).pack(side="left")
+        ttk.Combobox(
+            handoff, textvariable=self.output_application,
+            values=["Bambu Studio", "OrcaSlicer"], state="readonly", width=18
+        ).pack(side="left", padx=(8, 0))
+        ttk.Label(handoff, text="Validates first, then hands the file to the slicer.", style="Small.TLabel").pack(side="left", padx=(14, 0))
 
         slider = ttk.Frame(frame)
         slider.pack(fill="x", pady=(0, 16))
@@ -145,6 +155,7 @@ class StudioApp(tk.Tk):
             "texture": self.texture.get() or None,
             "custom": self.custom.get() or None,
             "auto_open": self.auto_open.get(),
+            "output_application": self.output_application.get(),
         }
         threading.Thread(target=self._run_conversion, args=(source, options), daemon=True).start()
 
@@ -171,6 +182,7 @@ class StudioApp(tk.Tk):
                 f"Physical slots: {result['realSlots']}   Mixed slots: {result['outputSlots'] - result['realSlots']}",
                 f"Quality: {result['quality']['qualityScore']:.1f} / 100   Mean dE: {result['quality']['estimatedDeltaE']:.2f}",
                 f"Confidence: {result['quality']['confidenceScore']:.1f} / 100   Contrast: {result['quality'].get('contrastRetention', 0):.1f}%",
+                f"Bambu color synchronization: dE {result['colorValidation']['maximumDeltaE']:.2f} max (verified)",
                 f"Printability: {result['printability']['difficulty']}   Mixed paint: {result['printability']['paintedMixedShare']:.1f}%",
                 "Geometry, textures and decoded paint remap: verified",
                 "Actual time and filament usage require slicing in Bambu Studio.",
@@ -180,7 +192,7 @@ class StudioApp(tk.Tk):
             self.last_output = result["output"]
             self.after(0, lambda: self.finish("\n".join(text)))
             if options["auto_open"]:
-                os.startfile(result["output"]) if os.name == "nt" else subprocess.run(["open", result["output"]])
+                self.open_validated_output(result["output"], options["output_application"])
         except Exception as error:
             self.after(0, lambda: self.fail(str(error)))
 
@@ -204,6 +216,28 @@ class StudioApp(tk.Tk):
             subprocess.Popen(["explorer", "/select,", output])
         else:
             subprocess.run(["open", "-R", output])
+
+    def open_validated_output(self, output, application):
+        if application != "OrcaSlicer":
+            os.startfile(output) if os.name == "nt" else subprocess.run(["open", output])
+            return
+        if os.name == "nt":
+            possible = [
+                Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "OrcaSlicer" / "orca-slicer.exe",
+                Path(os.environ.get("ProgramFiles", "")) / "OrcaSlicer" / "orca-slicer.exe",
+                Path(os.environ.get("ProgramFiles", "")) / "OrcaSlicer" / "OrcaSlicer.exe",
+            ]
+            executable = next((str(path) for path in possible if path.is_file()), None) or shutil.which("orca-slicer")
+            if executable:
+                subprocess.Popen([executable, output])
+                return
+        elif shutil.which("open") and subprocess.run(["open", "-Ra", "OrcaSlicer"]).returncode == 0:
+            subprocess.Popen(["open", "-a", "OrcaSlicer", output])
+            return
+        self.after(0, lambda: messagebox.showwarning(
+            "OrcaSlicer not found",
+            "The validated output was saved, but OrcaSlicer was not found. Install OrcaSlicer or open the .3mf manually."
+        ))
 
 
 if __name__ == "__main__":

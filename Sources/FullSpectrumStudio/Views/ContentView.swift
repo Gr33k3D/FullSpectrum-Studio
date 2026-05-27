@@ -2,39 +2,61 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: StudioStore
+    @State private var sidebarVisible = true
+    @State private var activityExpanded = false
 
     var body: some View {
-        ZStack {
-            StudioBackground()
+        GeometryReader { geometry in
+            let compactHeight = geometry.size.height < 900
+            let compactHeader = geometry.size.width < 1120
 
-            ScrollView {
-                VStack(spacing: 20) {
-                    HeaderView()
+            ZStack {
+                StudioBackground()
 
-                    ViewThatFits(in: .horizontal) {
-                        HStack(alignment: .top, spacing: 20) {
-                            ModelPreviewCard()
-                                .frame(minWidth: 400, idealWidth: 500, maxWidth: 570)
+                VStack(spacing: 16) {
+                    HeaderView(sidebarVisible: $sidebarVisible, compact: compactHeader)
 
-                            VStack(spacing: 16) {
-                                ConversionControlsCard()
-                                InventoryCard()
-                                PaletteResultsCard()
-                                    .frame(minHeight: 300)
+                    if geometry.size.width >= 980 {
+                        HStack(alignment: .top, spacing: 16) {
+                            if compactHeight {
+                                ScrollView {
+                                    primaryWorkspace(compactHeight: true, availableHeight: geometry.size.height)
+                                }
+                                .scrollIndicators(.visible)
+                            } else {
+                                primaryWorkspace(compactHeight: false, availableHeight: geometry.size.height)
                             }
-                            .frame(minWidth: 400)
-                        }
 
-                        VStack(spacing: 16) {
-                            ModelPreviewCard()
-                                .frame(minHeight: 500)
-                            ConversionControlsCard()
-                            InventoryCard()
-                            PaletteResultsCard()
-                                .frame(minHeight: 390)
+                            if sidebarVisible {
+                                ScrollView {
+                                    VStack(spacing: 14) {
+                                        ConversionControlsCard()
+                                        InventoryCard()
+                                        PaletteResultsCard()
+                                            .frame(minHeight: 520)
+                                    }
+                                }
+                                .scrollIndicators(.visible)
+                                .frame(width: min(440, max(360, geometry.size.width * 0.35)))
+                                .frame(maxHeight: geometry.size.height - 92)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                            }
+                        }
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 14) {
+                                ModelPreviewCard(compact: true)
+                                ActivityPanel(isExpanded: $activityExpanded)
+                                if sidebarVisible {
+                                    ConversionControlsCard()
+                                    InventoryCard()
+                                    PaletteResultsCard().frame(minHeight: 520)
+                                }
+                            }
                         }
                     }
                 }
+                .animation(.easeOut(duration: 0.18), value: sidebarVisible)
                 .padding(24)
             }
         }
@@ -49,6 +71,51 @@ struct ContentView: View {
         } message: {
             Text(store.errorMessage ?? "")
         }
+    }
+
+    @ViewBuilder
+    private func primaryWorkspace(compactHeight: Bool, availableHeight: CGFloat) -> some View {
+        VStack(spacing: 12) {
+            ModelPreviewCard(compact: compactHeight)
+                .frame(minHeight: compactHeight ? 470 : max(560, availableHeight - 215))
+            ActivityPanel(isExpanded: $activityExpanded)
+        }
+        .layoutPriority(1)
+    }
+}
+
+private struct ActivityPanel: View {
+    @EnvironmentObject private var store: StudioStore
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(store.progressMessage)
+                if let notice = store.inspection?.previewNotice {
+                    Text(notice)
+                }
+                ForEach(store.result?.warnings ?? [], id: \.self) { warning in
+                    Text(warning).foregroundStyle(.orange.opacity(0.9))
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.64))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 8)
+        } label: {
+            HStack {
+                Label("Activity and Validation Log", systemImage: "text.badge.checkmark")
+                Spacer()
+                Text(store.status)
+                    .lineLimit(1)
+                    .foregroundStyle(.white.opacity(0.48))
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.cyan.opacity(0.82))
+        }
+        .padding(12)
+        .background(CardSurface())
     }
 }
 
@@ -80,6 +147,8 @@ private struct StudioBackground: View {
 
 private struct HeaderView: View {
     @EnvironmentObject private var store: StudioStore
+    @Binding var sidebarVisible: Bool
+    let compact: Bool
 
     var body: some View {
         HStack(spacing: 15) {
@@ -100,11 +169,13 @@ private struct HeaderView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("FullSpectrum Studio")
-                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .font(.system(size: compact ? 22 : 26, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
-                Text("Local painted-project palette reduction and validation")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.56))
+                if !compact {
+                    Text("Local painted-project palette reduction and validation")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.56))
+                }
             }
 
             Spacer()
@@ -118,16 +189,38 @@ private struct HeaderView: View {
             Button {
                 store.chooseSourceFile()
             } label: {
-                Label("Open Source", systemImage: "plus")
+                if compact {
+                    Image(systemName: "plus")
+                } else {
+                    Label("Open Source", systemImage: "plus")
+                }
             }
             .buttonStyle(StudioButtonStyle(prominent: false))
+            .help("Open a painted source project")
 
             Button {
                 store.chooseReferenceFile()
             } label: {
-                Label("Reference", systemImage: "photo.on.rectangle")
+                if compact {
+                    Image(systemName: "photo.on.rectangle")
+                } else {
+                    Label("Reference", systemImage: "photo.on.rectangle")
+                }
             }
             .buttonStyle(StudioButtonStyle(prominent: false))
+            .help("Choose a visual reference")
+
+            Button {
+                sidebarVisible.toggle()
+            } label: {
+                if compact {
+                    Image(systemName: "sidebar.right")
+                } else {
+                    Label(sidebarVisible ? "Hide Tools" : "Show Tools", systemImage: "sidebar.right")
+                }
+            }
+            .buttonStyle(StudioButtonStyle(prominent: false))
+            .help("Toggle palette and validation controls")
         }
     }
 }

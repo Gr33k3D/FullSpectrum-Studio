@@ -1,99 +1,115 @@
-# FullSpectrum Studio v0.4 - v0.4.2 Final Report
+# FullSpectrum Studio v0.4.3 Final Report
 
-## Release Decision
+## Ship Decision
 
-Version `0.4.0-community-preview` established the improved conversion and
-validation workflow. Version `0.4.1-community-preview` fixed a large-project
-loading regression. Version `0.4.2-community-preview` is the release to use:
-it also fixes file-selection buttons that could fail to open a chooser in the
-macOS app.
-
-FullSpectrum remains:
+Version `0.4.3-community-preview` is the release candidate. It keeps the
+project's narrow purpose:
 
 ```text
 painted project -> palette reduction -> filament planning
 -> mixed filament generation -> validated .3mf
 ```
 
-It is not positioned as a slicer or as a calibrated universal color mixer.
+It is not a slicer, and the preview is not a calibrated claim about a finished
+print.
 
-## What Improved
+## Critical Color Fix
 
-- Bambu `paint_color` states are decoded and remapped from their serialized
-  slot meaning; output is rejected unless the reopened archive has the exact
-  expected decoded paint-state result.
-- Color planning now uses CIEDE2000, dynamic physical anchors, predicted-gain
-  thresholds and duplicate recipe reuse.
-- The UI reports estimated quality, confidence, brightness/contrast
-  preservation and pre-slice complexity, while refusing to invent print time,
-  grams or swap counts without sliced data.
-- The macOS viewer adds reduced/predicted, heatmap, anchor-influence and
-  wireframe modes, render presets, model statistics, improved cancellation and
-  clearer named filament recipes.
-- Windows uses the same validated engine with aligned planning controls and
-  reliable output reveal.
-- Experimental textured OBJ and constrained embedded-texture GLB import
-  preserve imported UV/texture meaning through the normal validation path and
-  warn when extended source clusters must be compressed for export.
+The real angel source project contains purple painted targets, including
+`#553B6A`, `#882FAA` and `#937EA6`. The earlier UI made this confusing by
+showing target swatches in the mixed-recipe list, while its prediction math
+could disagree with the color Bambu Studio loaded.
 
-## Stabilization Results
+Version 0.4.3 now:
 
-- The real textured-OBJ preview peak memory fell from `590.2 MB` to `309.1 MB`
-  after compact texture storage and streamed model XML.
-- A large painted-project conversion with both analysis overlays dropped from
-  `96.82 s` to `62.64 s` by reusing one preview geometry pass.
-- A very large raw GLB is rejected in `0.05 s` and about `25.5 MB` rather than
-  loading an input beyond the supported face limit.
-- A `5,417,070`-triangle painted `.3mf` now opens metadata/palette in `0.06 s`;
-  its optional interactive preview is declined in `3.96 s` at about `25.9 MB`
-  rather than entering a memory-heavy viewer build.
-- The automated suite contains `23` regression/security checks, including
-  paint codec states, exact output remap validation, mixed-slot safety,
-  bounded preview/analysis behavior, import behavior, deterministic schema
-  output, unsafe archive rejection and report privacy.
+- Uses Bambu Studio `FilamentMixer` loaded-swatch reconstruction for planning,
+  exported colors and preview.
+- Shows the painted target and reconstructed exported output separately.
+- Reopens every output and rejects any mixed slot whose saved display color is
+  not the color Bambu reconstructs from its serialized components and ratios.
+- Emits a mixed slot only when its reconstructed output is within Delta E `8`
+  of the painted target. A poor match stays visible as an unmatched physical
+  fallback warning instead of becoming a misleading recipe.
 
-Full measured results are in [BENCHMARK.md](BENCHMARK.md).
+## Real Project Validation
+
+One local painted angel `.3mf` with a GLB visual reference was converted in
+owned-filament mode using six physical slots. The private model and inventory
+are not distributed.
+
+| Check | Result |
+| --- | --- |
+| Source mesh size | `5,417,070` triangles |
+| Output palette | `6` physical + `11` mixed slots |
+| Written archive reopen/schema/paint/resource validation | Passed |
+| Bambu loaded-swatch synchronization | Passed, maximum Delta E `0.00` |
+| Largest accepted mixed-target error | Delta E `7.70` |
+| Unmatched painted colors | `6`, explicitly warned and not represented as bad mixes |
+| Estimated mean error | Delta E `3.73` |
+| Estimated quality / reference similarity | `91.8 / 100` / `86.4 / 100` |
+| Contrast retention / confidence | `81.0%` / `79.6` (`High`) |
+| Wall time / peak resident memory | `66.37 s` / `100.3 MB` |
+
+These are planning and software-consistency results. Physical output still
+depends on loaded filament, printing conditions, illumination and calibration.
+
+## Viewer And Performance
+
+- The macOS viewer is now the primary workspace, with collapsible tools and
+  activity log plus fullscreen display.
+- The original plate render plus original 3D, reduced/predicted, validation,
+  heatmap, anchor-influence and wireframe views are available from the same
+  result.
+- For the `5.4` million-triangle local project the viewer automatically built
+  shape-preserving bounded display proxies rather than presenting an empty or
+  fragmented viewport. The two analysis OBJ overlays each contained `71,389`
+  display faces and were about `2.3 MB`.
+- The predicted result reuses validated analysis geometry with its output
+  materials, avoiding a second expensive large-mesh viewport pass after
+  conversion.
+- The optimized preview affects visualization only. Conversion, paint remap,
+  array checks, texture/UV/resource checks and archive reopening still operate
+  on the complete project.
 
 ## Supported And Experimental
 
 Supported:
 
-- Painted Bambu Studio `.3mf` input.
-- Local inventory, Bambu planning palette, exact CMYKW and custom palette
-  planning sources.
+- Painted Bambu Studio `.3mf` conversion to a separate validated output.
+- Local read-only Bambu Studio Beta inventory, Bambu planning palettes, exact
+  CMYKW roles and local custom filament libraries.
 - Optional OBJ, GLB or image reference scoring.
-- macOS app and shared-engine Windows desktop build.
+- macOS desktop application and shared-engine Windows packaging workflow.
+- Validated-output handoff to an installed Bambu Studio or OrcaSlicer app.
 
 Experimental:
 
-- Textured OBJ import with complete UVs and PNG/JPEG base-color texture.
-- GLB import limited to uncompressed triangle primitives with positions, UVs,
-  node transforms and one embedded texture.
-- Optical-screen prediction mode, explicitly uncalibrated.
+- Textured OBJ source import with complete UVs and a PNG/JPEG texture.
+- Constrained embedded-texture GLB source import.
 
-Unsupported or intentionally deferred:
+Not claimed:
 
-- Image-only generation of printable geometry.
-- Raw imports above the two-million-face limit.
-- Broad compressed/multi-material GLB import.
-- Exact visual claims without printer/material calibration.
-- Print-time, purge-volume usage or filament-gram estimates before slicing.
-- Synced side-by-side/UV viewer modes until they can be implemented and
-  verified without weakening performance or trust.
+- Printer-calibrated color prediction.
+- Exact time, material, swap or purge-use estimates before slicing.
+- Universal GLB conversion or raw imports over the face-count safety limit.
+- A native OrcaSlicer plugin or Orca-specific mixed-color validation.
 
-## Privacy And Distribution
+## Verification
 
-- The app reads local Bambu inventory only on the user's device and does not
-  write local inventory paths or reference filenames into shareable reports.
-- Public assets contain rendered model artwork only; they do not expose local
-  file paths or inventory screens.
-- The project is distributed under PolyForm Noncommercial 1.0.0 for
-  non-commercial community use.
+- `28` automated conversion, paint-code, Bambu-color, import, archive-safety,
+  resource-fallback and privacy regression tests pass.
+- The release macOS application builds and launches successfully; the assembled
+  bundle and an extracted release ZIP pass strict `codesign` verification.
+- The macOS download is ad-hoc signed rather than Developer ID notarized;
+  Gatekeeper trust is not claimed for this community preview.
+- Generated shareable text reports omit local reference filenames and
+  inventory quantities.
+- Release packaging includes the PolyForm Noncommercial 1.0.0 license and the
+  MIT third-party notice for the Bambu-compatible mixer reconstruction.
 
 ## Recommended v0.5 Direction
 
-Do not broaden import formats first. The most useful next work is a small,
-optional calibration workflow for owned filaments and mixed ratios, followed
-by ingestion of slicer-generated time/purge/material statistics. Those two
-items would turn current honest estimates into more practical print decisions
-without changing FullSpectrum's identity.
+Do not expand source formats first. The responsible next improvement is an
+optional local calibration-card workflow for a user's real filaments, followed
+by importing slicer-produced time, purge and material statistics. Those steps
+would improve real print decisions without changing FullSpectrum's identity.

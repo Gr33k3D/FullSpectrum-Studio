@@ -1,13 +1,18 @@
+import AppKit
 import SwiftUI
 
 struct ModelPreviewCard: View {
     @EnvironmentObject private var store: StudioStore
     @State private var isTargeted = false
     @State private var cameraResetToken = 0
+    @State private var isFullScreen = false
+    var compact = false
 
     private var activeMeshURL: URL? {
         switch store.previewMode {
-        case .predicted:
+        case .plateImage:
+            return store.previewImage == nil ? store.previewMeshURL : nil
+        case .predicted, .validation:
             return store.outputPreviewMeshURL ?? store.previewMeshURL
         case .colorLoss:
             return store.heatmapMeshURL ?? store.outputPreviewMeshURL ?? store.previewMeshURL
@@ -33,7 +38,7 @@ struct ModelPreviewCard: View {
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.cyan.opacity(0.88))
                 }
-                if store.result != nil {
+                if store.inspection != nil {
                     Picker("Preview", selection: $store.previewMode) {
                         ForEach(PreviewMode.allCases) { mode in
                             Text(mode.rawValue).tag(mode)
@@ -73,6 +78,15 @@ struct ModelPreviewCard: View {
                                 .buttonStyle(.plain)
                                 .foregroundStyle(.cyan.opacity(0.9))
                                 .help("Reset camera")
+                                Button {
+                                    NSApp.keyWindow?.toggleFullScreen(nil)
+                                    isFullScreen.toggle()
+                                } label: {
+                                    Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.cyan.opacity(0.9))
+                                .help("Toggle fullscreen viewer window")
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -136,7 +150,7 @@ struct ModelPreviewCard: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 350, idealHeight: 470, maxHeight: .infinity)
+            .frame(minHeight: compact ? 400 : 520, idealHeight: compact ? 500 : 680, maxHeight: .infinity)
             .dropDestination(for: URL.self) { urls, _ in
                 guard let url = urls.first else { return false }
                 store.accept(url: url)
@@ -166,6 +180,14 @@ struct ModelPreviewCard: View {
                     .foregroundStyle(.cyan.opacity(0.72))
                     .lineLimit(1)
             }
+            if store.previewMode == .validation, let validation = store.result?.colorValidation {
+                Label(
+                    "App prediction vs Bambu reconstructed: maximum Delta E \(String(format: "%.2f", validation.maximumDeltaE))",
+                    systemImage: validation.verified ? "checkmark.shield" : "exclamationmark.triangle"
+                )
+                .font(.caption)
+                .foregroundStyle(validation.verified ? .green.opacity(0.86) : .orange.opacity(0.88))
+            }
             HStack(spacing: 12) {
                 Picker("Render", selection: $store.viewerPerformance) {
                     ForEach(ViewerPerformance.allCases) { option in Text(option.rawValue).tag(option) }
@@ -192,11 +214,15 @@ struct ModelPreviewCard: View {
 
     private var previewCaption: String {
         switch store.previewMode {
+        case .plateImage:
+            return "Original Bambu Studio plate render"
         case .original:
             return store.inspection?.`import` == nil
                 ? "Original painted mesh preview"
                 : "Imported painted approximation of source texture"
-        case .predicted: return "Reduced palette with predicted mixed colors"
+        case .predicted: return "Reduced palette with Bambu-reconstructed mixed colors"
+        case .validation:
+            return "Validation preview: app and Bambu reconstructed swatches match"
         case .colorLoss: return "Estimated color-loss heatmap: green low, red high"
         case .anchorInfluence: return "Dominant physical anchor influence"
         case .wireframe: return "Predicted palette wireframe"

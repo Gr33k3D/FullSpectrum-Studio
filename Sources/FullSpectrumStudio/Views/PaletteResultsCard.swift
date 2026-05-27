@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PaletteResultsCard: View {
     @EnvironmentObject private var store: StudioStore
+    @State private var showingColorDebug = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -43,6 +44,14 @@ struct PaletteResultsCard: View {
                         .font(.caption)
                         .foregroundStyle(.green.opacity(0.84))
                 }
+                if result.colorValidation.verified {
+                    Label(
+                        "Bambu loaded-color reconstruction verified (max sync dE \(String(format: "%.2f", result.colorValidation.maximumDeltaE)))",
+                        systemImage: "eyedropper.halffull"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.green.opacity(0.84))
+                }
                 Label("\(result.printability.difficulty) printability complexity; actual time and material require slicing", systemImage: "printer")
                     .font(.caption)
                     .foregroundStyle(.cyan.opacity(0.76))
@@ -75,6 +84,10 @@ struct PaletteResultsCard: View {
                         .font(.caption.weight(.semibold))
                         .buttonStyle(.plain)
                         .foregroundStyle(.cyan)
+                    Button("Color Report") { store.openColorValidationReport() }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.cyan)
                 }
 
                 ScrollView {
@@ -84,6 +97,19 @@ struct PaletteResultsCard: View {
                         }
                     }
                 }
+                DisclosureGroup("Color Debug View", isExpanded: $showingColorDebug) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("Target  |  App prediction  |  Exported  |  Bambu loaded")
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.white.opacity(0.48))
+                        ForEach(result.colorValidation.recipes) { entry in
+                            ColorDebugRow(entry: entry)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.cyan.opacity(0.9))
                 if result.import != nil {
                     Text("Experimental source import was converted through the same paint and preservation validator.")
                         .font(.caption2)
@@ -96,6 +122,36 @@ struct PaletteResultsCard: View {
         .padding(17)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(CardSurface())
+    }
+}
+
+private struct ColorDebugRow: View {
+    let entry: ColorValidationItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
+                Text("\(entry.newSlot)")
+                    .font(.caption2.monospacedDigit())
+                    .frame(width: 18, alignment: .leading)
+                ForEach(Array([entry.target, entry.appPrediction, entry.exported, entry.bambuLoaded].enumerated()), id: \.offset) { _, hex in
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color(hex: hex))
+                        .frame(width: 20, height: 20)
+                        .overlay { RoundedRectangle(cornerRadius: 4).stroke(.white.opacity(0.14)) }
+                }
+                Text("\(entry.components) @ \(entry.ratios)")
+                    .font(.caption2.monospaced())
+                    .lineLimit(1)
+                Spacer()
+                Text(String(format: "target dE %.1f  sync %.2f", entry.targetDeltaE, entry.predictionDeltaE))
+                    .font(.caption2.monospacedDigit())
+            }
+            Text("\(entry.target)  |  \(entry.appPrediction)  |  \(entry.exported)  |  \(entry.bambuLoaded)")
+                .font(.caption2.monospaced())
+                .foregroundStyle(.white.opacity(0.48))
+        }
+        .foregroundStyle(.white.opacity(0.65))
     }
 }
 
@@ -169,9 +225,21 @@ private struct RecipeRow: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color(hex: recipe.targetColor))
-                .frame(width: 26, height: 26)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color(hex: recipe.targetColor))
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.38))
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color(hex: recipe.preview))
+                }
+                .frame(width: 59, height: 21)
+                Text("target -> output")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.34))
+            }
             Text("\(recipe.newSlot)")
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.white.opacity(0.6))
@@ -203,6 +271,7 @@ private struct RecipeRow: View {
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
         .background(.white.opacity(0.026), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .help("Left swatch is the original painted target; right swatch is Bambu Studio's reconstructed exported color.")
     }
 }
 

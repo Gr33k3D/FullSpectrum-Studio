@@ -1,4 +1,4 @@
-name: Windows Build
+name: Release Builds
 
 on:
   workflow_dispatch:
@@ -6,11 +6,31 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run engine regression tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Build and verify application bundle
+        run: |
+          ./script/build_and_run.sh build
+          codesign --verify --deep --strict --verbose=2 "dist/FullSpectrum Studio.app"
+      - name: Create macOS ZIP
+        run: |
+          mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent "dist/FullSpectrum Studio.app" "release/FullSpectrum-Studio-macOS-v0.4.3.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FullSpectrum-Studio-macOS
+          path: release/*
+
   windows:
     runs-on: windows-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,12 +41,12 @@ jobs:
       - name: Run engine regression tests
         run: python -m unittest discover -s tests -v
       - name: Build portable application
-        run: pyinstaller --noconfirm --windowed --name FullSpectrumStudio --add-data "fullspectrum_engine.py;." desktop/full_spectrum_studio.py
+        run: pyinstaller --noconfirm --windowed --name FullSpectrumStudio --hidden-import bambu_mixer_model --add-data "fullspectrum_engine.py;." --add-data "bambu_mixer_model.py;." --add-data "LICENSE;." --add-data "THIRD_PARTY_NOTICES.md;." desktop/full_spectrum_studio.py
       - name: Create portable ZIP
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release
-          Compress-Archive -Path dist/FullSpectrumStudio/* -DestinationPath release/FullSpectrum-Studio-Windows-Portable-v0.4.2.zip -Force
+          Compress-Archive -Path dist/FullSpectrumStudio/* -DestinationPath release/FullSpectrum-Studio-Windows-Portable-v0.4.3.zip -Force
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Build installer
@@ -36,9 +56,27 @@ jobs:
         with:
           name: FullSpectrum-Studio-Windows
           path: release/*
-      - name: Attach Windows downloads to tagged release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: FullSpectrum-Studio-*
+          path: release
+          merge-multiple: true
+      - name: Create or repair community preview release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${env:GITHUB_REF_NAME}" release/* --clobber
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --prerelease \
+              --title "FullSpectrum Studio v0.4.3 Community Preview" \
+              --notes-file docs/RELEASE_NOTES_0.4.3.md
+          fi

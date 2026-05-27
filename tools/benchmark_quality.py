@@ -30,7 +30,7 @@ def main():
             converted = ENGINE.convert(
                 source, "official", args.palette_source, Path(folder) / label, False, "auto",
                 reference=args.reference, custom_catalog_path=args.custom_palette,
-                quality_bias=bias, mix_model="perceptual",
+                quality_bias=bias, mix_model="bambu",
             )
             results.append({
                 "variant": label,

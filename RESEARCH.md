@@ -57,10 +57,10 @@ Source:
 ### Bambu Studio Mixed-Filament Context
 
 Bambu Studio's public source contains mixed-filament color prediction code and
-project structures. FullSpectrum relies only on observed project structure and
-its own paint-state decoder/validator; it does not embed Bambu color-prediction
-source. Generated outputs are reopened and checked before being offered to the
-user.
+project structures. Version 0.4.3 includes an MIT-attributed compatibility
+representation of the Bambu `FilamentMixerModel` coefficients so planning,
+preview and the saved swatches follow what Bambu loads. Generated outputs are
+reopened and checked before being offered to the user.
 
 Source:
 
@@ -88,7 +88,7 @@ Sources:
 
 | Finding | FullSpectrum response |
 | --- | --- |
-| Uncalibrated blends can look convincing on screen but fail in print | Every prediction is labelled an estimate; add confidence and experimental optical-screen mode |
+| Uncalibrated blends can look convincing on screen but fail in print | Follow Bambu's loaded-swatch reconstruction, label physical appearance as an estimate and reject visibly unreliable mix targets |
 | More virtual colors can cost complexity without visible gain | Mixes need a configurable visual gain and identical recipes share one logical slot |
 | Painted-project corruption is worse than a mediocre palette | Validate exact decoded paint remap, geometry/UV and resources after reopening output |
 | Texture references contain information beyond a sparse slot palette | Let reference colors influence anchor choice modestly and report reference similarity |

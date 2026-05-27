@@ -64,21 +64,32 @@ enum RealSlotSelection: String, CaseIterable, Identifiable {
 }
 
 enum MixPrediction: String, CaseIterable, Identifiable {
-    case perceptual
-    case opticalScreen = "optical-screen"
+    case bambu
 
     var id: Self { self }
-    var title: String { self == .perceptual ? "Conservative" : "Optical Screen (Experimental)" }
-    var explanation: String {
-        self == .perceptual
-        ? "Perceptual planning estimate; verify real mixed colors with a test print."
-        : "Uncalibrated optical-screen estimate for experimentation only."
+    var title: String { "Bambu Studio Reconstruction" }
+    var explanation: String { "Mixed swatches are computed from the same component recipes and rounded ratios Bambu loads." }
+}
+
+enum OutputApplication: String, CaseIterable, Identifiable {
+    case bambuStudio = "bambu-studio"
+    case orcaSlicer = "orca-slicer"
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .bambuStudio: return "Bambu Studio"
+        case .orcaSlicer: return "OrcaSlicer"
+        }
     }
 }
 
 enum PreviewMode: String, CaseIterable, Identifiable {
+    case plateImage = "Plate render"
     case original = "Original"
     case predicted = "Reduced / predicted"
+    case validation = "Validation"
     case colorLoss = "Heatmap"
     case anchorInfluence = "Anchor influence"
     case wireframe = "Wireframe"
@@ -144,6 +155,7 @@ struct ConversionResult: Decodable {
     let output: String
     let csv: String
     let report: String
+    let colorValidationReport: String
     let mode: String
     let paletteSource: String
     let sourceSlots: Int
@@ -155,6 +167,7 @@ struct ConversionResult: Decodable {
     let anchors: [AnchorFilament]
     let recipes: [RecipeItem]
     let quality: QualityMetrics
+    let colorValidation: ColorValidationSummary
     let printability: PrintabilityMetrics
     let preservation: PreservationResult
     let reference: ReferenceSummary?
@@ -166,6 +179,28 @@ struct ConversionResult: Decodable {
     var mixedRecipes: [RecipeItem] {
         recipes.filter { $0.kind == "MIX" }
     }
+}
+
+struct ColorValidationSummary: Decodable {
+    let predictionModel: String
+    let verified: Bool
+    let maximumDeltaE: Double
+    let recipes: [ColorValidationItem]
+}
+
+struct ColorValidationItem: Decodable, Identifiable {
+    let oldSlot: Int
+    let newSlot: Int
+    let target: String
+    let appPrediction: String
+    let exported: String
+    let bambuLoaded: String
+    let targetDeltaE: Double
+    let predictionDeltaE: Double
+    let components: String
+    let ratios: String
+
+    var id: Int { oldSlot }
 }
 
 struct QualityMetrics: Decodable {
@@ -202,6 +237,7 @@ struct PreservationResult: Decodable {
 }
 
 struct AnalysisAssets: Decodable {
+    let predictedMesh: String?
     let heatmapMesh: String?
     let anchorInfluenceMesh: String?
 }

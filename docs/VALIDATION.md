@@ -7,6 +7,8 @@
   remapping, rather than merely checking that slots exist.
 - No missing paint slot references after writing.
 - Physical/mixed slot ordering, component validity, ratios and non-recursion.
+- Synchronization of `filament_colour` and `filament_multi_colour`, with each
+  mixed swatch reconstructed using Bambu Studio component/ratio behavior.
 - Aligned filament arrays and correctly resized square purge matrices.
 - No zero off-diagonal purge transition in an output purge matrix.
 - Reopen-and-validate of the written `.3mf`.
@@ -14,8 +16,14 @@
   only `paint_color` changes in object models.
 - Safe ZIP extraction rejection for traversal/symlink/oversize input.
 - CIEDE2000 published reference-pair calculation.
+- Bambu mixer regressions for purple, green, orange, neutral and dark mixes,
+  and loaded-color swatches observed in the real angel benchmark.
+- Rejection of a misleading black/pink purple recipe when the reconstructed
+  output cannot meet the Delta E reliability limit.
 - Gain-limited mix reuse, quality-bias behavior, analysis meshes and constrained
   textured OBJ/GLB import/rejection cases.
+- Shareable text report omission of reference filenames and local inventory
+  quantities.
 
 ## Running Tests
 
@@ -23,13 +31,14 @@
 python3 -m unittest discover -s tests -v
 swift build -c debug
 ./script/build_and_run.sh build
+codesign --verify --deep --strict --verbose=2 "dist/FullSpectrum Studio.app"
 ```
 
-The suite currently includes `23` synthetic regression and security tests,
+The suite currently includes `28` synthetic/regression and security tests,
 including rejection of over-limit GLB import before geometry decoding and a
-shareable-report reference-filename privacy check. It also tests lightweight
-metadata opening and automatic suppression of oversized optional preview and
-analysis meshes.
+shareable-report reference-filename/inventory-quantity privacy check. It also tests lightweight
+metadata opening and grid-reduced optimized preview/analysis fallbacks for
+oversized models.
 
 ## Regression Samples
 

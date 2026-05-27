@@ -27,7 +27,9 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_MACOS" "$APP_RESOURCES"
 cp "$BUILD_BINARY" "$APP_BINARY"
 cp "$ROOT_DIR/fullspectrum_engine.py" "$APP_RESOURCES/FullSpectrumEngine.py"
+cp "$ROOT_DIR/bambu_mixer_model.py" "$APP_RESOURCES/bambu_mixer_model.py"
 cp "$ROOT_DIR/LICENSE" "$APP_RESOURCES/LICENSE"
+cp "$ROOT_DIR/THIRD_PARTY_NOTICES.md" "$APP_RESOURCES/THIRD_PARTY_NOTICES.md"
 chmod +x "$APP_BINARY" "$APP_RESOURCES/FullSpectrumEngine.py"
 # Prevent local compiler path/debug symbols from travelling in a shared app ZIP.
 /usr/bin/strip -S -x "$APP_BINARY"
@@ -48,9 +50,9 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.4.2</string>
+  <string>0.4.3</string>
   <key>CFBundleVersion</key>
-  <string>6</string>
+  <string>7</string>
   <key>CFBundleGetInfoString</key>
   <string>Community Preview - validated local reduced-filament workflow</string>
   <key>LSMinimumSystemVersion</key>
@@ -77,6 +79,12 @@ cat >"$INFO_PLIST" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Seal the completed bundle after all resources have been copied. This is an
+# ad-hoc signature for community downloads, not Developer ID notarization.
+/usr/bin/xattr -cr "$APP_BUNDLE"
+/usr/bin/codesign --force --deep --sign - --timestamp=none "$APP_BUNDLE"
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"

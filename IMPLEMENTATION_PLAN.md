@@ -7,9 +7,9 @@
 | Paint-code decoding and remapping | Implemented | Known Bambu codes and expected-state equivalence tests |
 | ZIP/schema/purge/mixed-slot safety | Implemented | Archive, array and purge regression tests |
 | CIEDE2000 engine | Implemented | Published reference-pair test |
-| Adaptive mix suppression and recipe reuse | Implemented | Bias monotonicity and duplicate recipe tests |
+| Bambu reconstructed mix suppression and recipe reuse | Implemented | Loaded-swatch, reliability-limit, bias monotonicity and duplicate recipe tests |
 | Reference-aware quality metrics | Implemented | Reference conversion test and private real-model run |
-| Loss/influence viewport assets | Implemented | Mesh-generation regression test |
+| Loss/influence viewport assets and large-model fallback | Implemented | Standard and optimized mesh-generation regression tests |
 | Textured OBJ import | Experimental | UV/texture validated synthetic fixture |
 | Constrained textured GLB import | Experimental | Embedded-texture transformed synthetic fixture |
 | Broader GLB material/compression import | Deferred | Reject unsupported primitives explicitly |
@@ -19,12 +19,15 @@
 
 1. Reject unsafe or malformed source archives.
 2. Decode source paint states and count painted slot usage.
-3. Select physical anchors and only beneficial logical mixes.
+3. Select physical anchors and only logical mixes whose serialized,
+   Bambu-reconstructed color is both beneficial and within the reliability
+   limit.
 4. Remap paint states by decoding and re-encoding their referenced slots.
 5. Resize aligned filament arrays and purge matrices.
 6. Write a separate output archive.
-7. Reopen it, validate every slot/mix/array/purge rule and compare output paint
-   state counts to the expected decoded remap.
+7. Reopen it, validate every slot/mix/array/purge rule, compare output paint
+   state counts to the expected decoded remap and reconstruct every saved mix
+   using Bambu's loaded-swatch behavior.
 8. Compare geometry, UV-bearing object content and source resources.
 9. Only then return reports and allow opening in Bambu Studio.
 

@@ -10,7 +10,8 @@ The source project is never modified.
 This is an independent community preview built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest reliability update: [v0.4.2 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.2-community-preview).
+Latest correctness update: [v0.4.3 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.3-community-preview)
+fixes mixed-color prediction to follow Bambu Studio's loaded-color reconstruction.
 
 ## What It Does
 
@@ -25,22 +26,37 @@ Latest reliability update: [v0.4.2 Community Preview](https://github.com/Gr33k3D
   reports estimated similarity, brightness, contrast and confidence.
 - Imports constrained textured `.obj` and embedded-texture `.glb` sources
   experimentally as new painted projects, routed through the same validator.
-- Provides movable original, reduced/predicted, heatmap, anchor-influence and
-  wireframe previews on macOS.
+- Provides the original plate render plus movable original, reduced/predicted,
+  validation, heatmap, anchor-influence and wireframe previews on macOS.
+- Reconstructs mixed swatches with Bambu Studio's `FilamentMixer` model and
+  exports a color-validation report for app/export/Bambu comparisons.
+- Keeps a mixed recipe only when Bambu's reconstructed color is within a
+  reliable match threshold; otherwise it keeps the nearest physical anchor
+  and warns that an additional real filament is needed.
 - Opens large painted projects through a quick thumbnail/palette pass and
-  omits optional 3D overlays above a practical triangle budget rather than
-  forcing a slow, memory-heavy viewer build.
+  builds a grid-reduced, memory-bounded movable preview instead of leaving the
+  viewer blank or forcing a full multi-million-triangle display build.
+- Can hand a validated output directly to Bambu Studio or OrcaSlicer when the
+  selected slicer is installed.
 
 ## Preview
 
-![Source preview, estimated color-loss heatmap and anchor-influence overlay](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/download/v0.4.0-community-preview/FullSpectrum-angel-analysis-v0.4.png)
+![FullSpectrum Studio predicted preview and palette validation](teasers/v0.4.3-predicted.png)
 
 Preview estimates from a validated local test project; this is not a calibrated
-printed-color measurement.
+printed-color measurement. Screenshots demonstrate view modes from a detail
+run; the documented benchmark uses its stated validated planning setting, so
+logical mixed-slot counts can differ.
 
-The displayed analysis image was produced with v0.4; v0.4.2 preserves that
-workflow and includes the large-file loading guard and reliable native file
-pickers for source/reference selection.
+Version v0.4.3 centers the viewer, adds fullscreen viewing and color-debug
+comparison, displays target and exported mixed swatches separately, and
+corrects mixed-color preview synchronization with Bambu Studio.
+
+Additional real-project views:
+[original plate](teasers/v0.4.3-original.png) |
+[validation](teasers/v0.4.3-validation.png) |
+[color-loss heatmap](teasers/v0.4.3-heatmap.png) |
+[anchor influence](teasers/v0.4.3-anchor.png)
 
 ## Validation
 
@@ -52,6 +68,8 @@ Every output is reopened before it is accepted. The engine rejects output if:
 - Filament arrays or purge matrices are misaligned, or a generated purge
   matrix contains a zero off-diagonal transition.
 - Written paint states do not equal the exact expected decoded remap.
+- `filament_colour` and `filament_multi_colour` disagree, or any saved mixed
+  swatch differs from the color Bambu reconstructs from its recipe.
 - Existing geometry, UV-bearing model data or source textures/resources change
   beyond permitted paint remapping.
 
@@ -85,9 +103,10 @@ roles to owned colors and warns when a match is poor.
 Accepts a JSON file in the format shown at
 [examples/custom-palette.example.json](examples/custom-palette.example.json).
 
-Mixed-color previews and quality scores are estimates, not printer
-calibration. Version 0.4 uses CIEDE2000 for comparison and offers a conservative
-default prediction plus an opt-in, uncalibrated optical-screen experiment.
+Mixed-color previews now use the same Bambu Studio reconstruction model as the
+saved recipe display color. Quality scores still estimate closeness to the
+source, not a calibrated physical print: material, layers and lighting remain
+real-world variables.
 
 ## Reference And Source Import
 
@@ -106,8 +125,9 @@ candidate:
 - Images by themselves do not contain printable geometry.
 - Imports over two million faces are rejected; very large raw GLBs remain
   useful as references to an already practical painted `.3mf`.
-- Automatic interactive and analysis previews are omitted above `750,000`
-  triangles; conversion and validation remain available.
+- Large `.3mf` projects use an automatically grid-reduced optimized preview and
+  optimized analysis overlays. Palette conversion and archive validation
+  still use the full project data.
 
 ## Printability Reporting
 
@@ -132,8 +152,10 @@ Requirements:
 ./script/build_and_run.sh run
 ```
 
-The application is written to `dist/FullSpectrum Studio.app`. Community
-preview ZIPs are ad-hoc signed rather than notarized.
+The application is written to `dist/FullSpectrum Studio.app`. The viewer is
+the primary workspace, with collapsible tools and activity log plus fullscreen
+preview for screenshots and close visual inspection. Community preview ZIPs
+have a verified ad-hoc bundle signature; they are not Developer ID notarized.
 
 ## Windows App
 
@@ -141,6 +163,18 @@ Windows uses the same Python conversion and validation engine in a compact
 desktop shell. Tagged releases build a portable ZIP and installer through
 [.github/workflows/windows-release.yml](.github/workflows/windows-release.yml).
 The macOS orbitable analysis viewer is not present in the Windows UI.
+
+## OrcaSlicer Handoff
+
+The app now offers `OrcaSlicer` as an output destination. FullSpectrum still
+does the palette reduction and validation first, then opens the separately
+saved `.3mf` in an installed OrcaSlicer application.
+
+This is intentionally a file handoff, not an OrcaSlicer plugin. Validation of
+Bambu mixed-filament loaded swatches remains Bambu-specific; when opening a
+FullSpectrum file in OrcaSlicer, inspect filament assignments and slice a
+small test before committing to a color-sensitive print. See
+[docs/ORCASLICER_HANDOFF.md](docs/ORCASLICER_HANDOFF.md).
 
 ## Command Line
 
@@ -166,8 +200,8 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 
 ## Privacy And Safety
 
-- Inventory access is local and read-only. No spool identifiers or local
-  inventory paths are written to generated shareable reports.
+- Inventory access is local and read-only. No spool identifiers, quantities or
+  local inventory paths are written to generated shareable text reports.
 - Packaged macOS executables are stripped of local build-path/debug symbols
   before release archives are produced.
 - Private model projects, generated outputs, inventories and private
@@ -186,10 +220,15 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Implementation Plan](IMPLEMENTATION_PLAN.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Validation And Testing](docs/VALIDATION.md)
+- [Color Validation](COLOR_VALIDATION.md)
+- [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
 - [0.4.1 Reliability Notes](docs/RELEASE_NOTES_0.4.1.md)
 - [0.4.2 Button Fix Notes](docs/RELEASE_NOTES_0.4.2.md)
+- [0.4.3 Color Synchronization Notes](docs/RELEASE_NOTES_0.4.3.md)
+- [OrcaSlicer Handoff](docs/ORCASLICER_HANDOFF.md)
+- [Bambu Forum Update Draft](docs/BAMBU_FORUM_POST_v0.4.3.md)
 
 ## License
 

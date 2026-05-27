@@ -68,7 +68,7 @@ struct ConverterService {
     func previewMesh(
         file: URL,
         outputURL: URL,
-        mixPrediction: MixPrediction = .perceptual,
+        mixPrediction: MixPrediction = .bambu,
         textureOverride: URL? = nil,
         progress: (@Sendable (Double, String) -> Void)? = nil
     ) async throws -> ProjectInspection {
@@ -173,16 +173,17 @@ struct ConverterService {
             diagnostics.consume(remainingErrorData).forEach { progress?($0.progress, $0.message) }
             let diagnosticsData = diagnostics.snapshot()
             if process.terminationStatus != 0 {
-                let details = String(data: diagnosticsData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let lines = (String(data: diagnosticsData, encoding: .utf8) ?? "")
+                    .split(whereSeparator: \.isNewline)
+                let details = lines.last(where: { $0.hasPrefix("ERROR:") })
+                    .map { String($0.dropFirst("ERROR:".count)).trimmingCharacters(in: .whitespaces) }
                 throw ConverterError.processFailure(details ?? "Conversion failed.")
             }
 
             do {
                 return try JSONDecoder().decode(type, from: outputData)
             } catch {
-                let diagnostics = String(data: diagnosticsData, encoding: .utf8) ?? ""
-                throw ConverterError.processFailure("Could not read converter output. \(diagnostics)")
+                throw ConverterError.processFailure("Could not read converter output from the local conversion engine.")
             }
         }
         return try await withTaskCancellationHandler {

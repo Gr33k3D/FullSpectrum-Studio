@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.4.3 Community Preview - 2026-05-27
+
+### Critical Fix
+
+- Replaces FullSpectrum's independent mixed-swatch preview calculation with
+  Bambu Studio compatible `FilamentMixer` reconstruction.
+- Scores candidate mixes from the serialized, rounded component ratios Bambu
+  actually reloads and displays.
+- Reopens each written archive and rejects it if `filament_colour`,
+  `filament_multi_colour` or any reconstructed mixed swatch is inconsistent.
+- Adds Validation preview mode, Color Debug View and a generated
+  `*_COLOR_VALIDATION.md` report.
+- Adds regression coverage for purple, green, orange, neutral and dark mixes,
+  plus Bambu-loaded mixed swatches from the local angel benchmark.
+- Stops creating a mixed logical slot when Bambu reconstruction remains more
+  than Delta E `8` from the painted target, and reports unmatched painted
+  colors as a request for closer physical filament choices.
+- Distinguishes painted target swatches from actual reconstructed output
+  swatches in the recipe list.
+
+### Viewer And Reliability
+
+- Makes the orbitable viewer the main workspace, with collapsible controls,
+  collapsible activity output and fullscreen viewing.
+- Keeps the detailed original plate render selectable alongside the bounded
+  orbitable 3D view for exceptionally complex projects.
+- Replaces the large-model blank-preview path with a full-surface,
+  grid-reduced optimized preview and matching heatmap/anchor overlays.
+- Makes compact-height windows scroll cleanly instead of allowing the viewer,
+  log and controls to collide.
+- Makes Finder reveal fall back to opening the output directory if selecting
+  the generated file is unavailable.
+- Resolves inventory colors to installed Bambu catalog names where the Beta
+  inventory supplies only a color code, with honest hexadecimal fallback.
+- Removes inventory quantities from generated shareable text reports and
+  covers that privacy boundary with a regression test.
+- Adds a validated-output destination choice for installed Bambu Studio or
+  OrcaSlicer; Orca support is an explicit file handoff rather than a claimed
+  plugin.
+- Rebuilds release packaging from source on macOS and Windows, and seals and
+  strictly verifies the assembled ad-hoc signed macOS bundle before ZIP
+  packaging.
+
 ## 0.4.2 Community Preview - 2026-05-27
 
 ### Fixed

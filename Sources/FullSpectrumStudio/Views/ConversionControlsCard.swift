@@ -52,6 +52,20 @@ struct ConversionControlsCard: View {
             }
             .foregroundStyle(.white.opacity(0.7))
 
+            if store.autoOpenValidatedOutput {
+                Picker("Open validated output in", selection: Binding(
+                    get: { store.outputApplication },
+                    set: { store.outputApplication = $0 }
+                )) {
+                    ForEach(OutputApplication.allCases) { destination in
+                        Text(destination.title).tag(destination)
+                    }
+                }
+                .pickerStyle(.menu)
+                .foregroundStyle(.white.opacity(0.7))
+                .help("FullSpectrum validates first, then hands the saved project to the selected slicer.")
+            }
+
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text("Quality vs waste")
@@ -72,15 +86,12 @@ struct ConversionControlsCard: View {
                     .foregroundStyle(.white.opacity(0.48))
             }
 
-            Picker("Mix prediction", selection: $store.mixPrediction) {
-                ForEach(MixPrediction.allCases) { prediction in
-                    Text(prediction.title).tag(prediction)
-                }
-            }
-            .pickerStyle(.menu)
+            Label(store.mixPrediction.title, systemImage: "checkmark.shield")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.green.opacity(0.84))
             Text(store.mixPrediction.explanation)
                 .font(.caption2)
-                .foregroundStyle(store.mixPrediction == .perceptual ? .white.opacity(0.48) : .orange.opacity(0.84))
+                .foregroundStyle(.white.opacity(0.48))
 
             HStack(spacing: 10) {
                 Button(store.referenceURL == nil ? "Add Reference" : "Change Reference") {
@@ -163,10 +174,10 @@ struct ConversionControlsCard: View {
                     Button {
                         store.revealOutput()
                     } label: {
-                        Label("Show Output", systemImage: "folder")
+                        Label("Open Folder", systemImage: "folder")
                     }
                     .buttonStyle(StudioButtonStyle())
-                    .help("Reveal the validated output in Finder")
+                        .help("Reveal the validated output in Finder")
                 }
                 if store.isWorking {
                     Button("Cancel") { store.cancelConversion() }
@@ -177,6 +188,17 @@ struct ConversionControlsCard: View {
                         .buttonStyle(StudioButtonStyle())
                         .help("Stop only the optional interactive preview build")
                 }
+            }
+
+            if store.result != nil {
+                Button {
+                    store.openOutput()
+                } label: {
+                    Label("Open Validated File in \(store.outputApplication.title)", systemImage: "arrow.up.forward.app")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(StudioButtonStyle())
+                .help("Open the saved validated .3mf in \(store.outputApplication.title)")
             }
 
             HStack(spacing: 10) {

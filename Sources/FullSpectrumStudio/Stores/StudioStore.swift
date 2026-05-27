@@ -8,7 +8,7 @@ final class StudioStore: ObservableObject {
     @Published var mode: PaletteMode = .official
     @Published var paletteSource: PaletteSource = .inventory
     @Published var realSlots: RealSlotSelection = .auto
-    @Published var mixPrediction: MixPrediction = .perceptual
+    @Published var mixPrediction: MixPrediction = .bambu
     @Published var qualityBias = 60.0
     @Published var previewMode: PreviewMode = .original
     @Published var viewerPerformance: ViewerPerformance = .balanced
@@ -33,6 +33,7 @@ final class StudioStore: ObservableObject {
     @Published var progress = 0.0
     @Published var progressMessage = "Waiting for a model."
     @AppStorage("autoOpenValidatedOutput") var autoOpenValidatedOutput = true
+    @AppStorage("outputApplication") private var outputApplicationRawValue = OutputApplication.bambuStudio.rawValue
     @AppStorage("restoreLastSession") var restoreLastSession = false
     @AppStorage("lastProjectPath") private var lastProjectPath = ""
 
@@ -46,6 +47,11 @@ final class StudioStore: ObservableObject {
     private var retainedSourceURL: URL?
     private var retainedSourceAccess = false
     private let immediateImportedPreviewByteLimit = 48 * 1024 * 1024
+
+    var outputApplication: OutputApplication {
+        get { OutputApplication(rawValue: outputApplicationRawValue) ?? .bambuStudio }
+        set { outputApplicationRawValue = newValue.rawValue }
+    }
 
     init() {
         refreshInventory()
@@ -377,12 +383,15 @@ final class StudioStore: ObservableObject {
                 guard conversionID == currentConversionID else { return }
                 result = converted
                 inventory = converted.inventory
+                outputPreviewMeshURL = converted.analysisAssets?.predictedMesh.map(URL.init(fileURLWithPath:))
                 heatmapMeshURL = converted.analysisAssets?.heatmapMesh.map(URL.init(fileURLWithPath:))
                 anchorInfluenceMeshURL = converted.analysisAssets?.anchorInfluenceMesh.map(URL.init(fileURLWithPath:))
                 progress = 1
                 progressMessage = "Validated output is ready."
                 status = "Validated: \(converted.realSlots) physical and \(converted.outputSlots - converted.realSlots) mixed slots."
-                buildOutputPreview(for: converted.output, conversionID: currentConversionID, mixPrediction: capturedPrediction)
+                if outputPreviewMeshURL == nil {
+                    buildOutputPreview(for: converted.output, conversionID: currentConversionID, mixPrediction: capturedPrediction)
+                }
                 if autoOpenValidatedOutput {
                     openOutput()
                 }
@@ -491,11 +500,71 @@ final class StudioStore: ObservableObject {
             errorMessage = "The validated output file could not be found."
             return
         }
-        NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+        if !NSWorkspace.shared.selectFile(outputURL.path, inFileViewerRootedAtPath: "") {
+            NSWorkspace.shared.open(outputURL.deletingLastPathComponent())
+        }
     }
 
     func openOutput() {
         guard let path = result?.output else { return }
+        let outputURL = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: outputURL.path) else {
+            errorMessage = "The validated output file could not be found."
+            return
+        }
+        switch outputApplication {
+        case .bambuStudio:
+            if let applicationURL = installedApplication(
+                bundleIdentifiers: ["com.bambulab.bambu-studio"],
+                applicationNames: ["BambuStudio.app"]
+            ) {
+                open(outputURL, with: applicationURL, named: "Bambu Studio")
+            } else if !NSWorkspace.shared.open(outputURL) {
+                errorMessage = "Could not open the validated output in its default application."
+            }
+        case .orcaSlicer:
+            guard let applicationURL = installedApplication(
+                bundleIdentifiers: ["com.softfever3d.orca-slicer", "com.orcaslicer.OrcaSlicer"],
+                applicationNames: ["OrcaSlicer.app", "Orca Slicer.app"]
+            ) else {
+                errorMessage = "OrcaSlicer is not installed. The validated output is saved and can be opened manually after installing OrcaSlicer."
+                return
+            }
+            open(outputURL, with: applicationURL, named: "OrcaSlicer")
+        }
+    }
+
+    func openColorValidationReport() {
+        guard let path = result?.colorValidationReport else { return }
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    private func installedApplication(bundleIdentifiers: [String], applicationNames: [String]) -> URL? {
+        for identifier in bundleIdentifiers {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) {
+                return url
+            }
+        }
+        let roots = [URL(fileURLWithPath: "/Applications", isDirectory: true),
+                     URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications", isDirectory: true)]
+        for root in roots {
+            for name in applicationNames {
+                let candidate = root.appendingPathComponent(name, isDirectory: true)
+                if FileManager.default.fileExists(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+        }
+        return nil
+    }
+
+    private func open(_ outputURL: URL, with applicationURL: URL, named name: String) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        NSWorkspace.shared.open([outputURL], withApplicationAt: applicationURL, configuration: configuration) { [weak self] _, error in
+            guard let error else { return }
+            Task { @MainActor in
+                self?.errorMessage = "Could not open the validated output in \(name): \(error.localizedDescription)"
+            }
+        }
     }
 }

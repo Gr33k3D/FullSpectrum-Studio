@@ -11,36 +11,45 @@
 4. CIEDE2000-weighted anchor selection uses painted usage and, when supplied,
    a modest texture-reference contribution. Physical slots are selected from
    the requested filament source.
-5. Mixed slots are generated only from physical slots, only when predicted
-   visual gain clears the selected quality-versus-waste threshold, and are
-   reused when two paint targets share the same printable recipe.
+5. Mixed slots are generated only from physical slots. Candidate quality and
+   exported swatches use Bambu Studio `FilamentMixer` reconstruction from the
+   saved, percentage-rounded ratios; recipes are reused where possible. A
+   candidate is emitted only if the reconstructed result is within Delta E
+   `8` of its painted target, so an attractive target color cannot masquerade
+   as a poor printable output.
 6. Project filament arrays and purge matrices are resized through their
    detected slot/matrix layout.
 7. The output archive is written separately, reopened, structurally validated,
-   compared to preservation hashes, and checked against the exact expected
-   decoded paint remap.
+   compared to preservation hashes, checked against the exact expected decoded
+   paint remap, and rejected if Bambu's reconstructed mixed colors differ.
 8. Recipes, confidence/contrast/complexity estimates and optional analysis
    meshes are returned to the UI.
 
-Heatmap and anchor-influence display assets share one reduced viewport geometry
-pass and differ only in material colors; large converted archives are not
-decompressed twice merely to draw two overlays.
+Predicted, heatmap and anchor-influence display assets share one reduced
+viewport geometry pass and differ only in material colors; large converted
+archives are not decompressed again merely to change view mode.
 
-Since v0.4.1, opening a `.3mf` reads its palette and thumbnail before optional
-interactive work. Interactive and analysis viewport meshes are omitted above
-`750,000` triangles, leaving conversion/validation available without committing
-the application to a disproportionate display allocation. Background preview
-results are generation-scoped, so an older file cannot replace a newer
-selection when it finishes later.
+Opening a `.3mf` reads its palette and thumbnail before optional interactive
+work. Large projects are visualized with sampled, grid-reduced viewport meshes
+and analysis overlays, while palette conversion and reopened-archive
+validation continue to use the full project data. The UI tells the user when
+the optimized preview is active. Background preview results are
+generation-scoped, so an older file cannot replace a newer selection when it
+finishes later.
 
 The macOS shell opens source, reference, custom-library and OBJ-texture files
 through one native `NSOpenPanel` path. This avoids competing view-level
 presentation modifiers and makes every file-selection button perform the same
-observable action.
+observable action. After conversion succeeds, either desktop shell can hand
+the validated saved output to installed Bambu Studio or OrcaSlicer. This is a
+launcher boundary only: Bambu loaded-swatch validation remains part of the
+engine, and no Orca plugin API is assumed.
 
 ## Components
 
 - `fullspectrum_engine.py`: conversion, codec, reference analysis and validation.
+- `bambu_mixer_model.py`: MIT-attributed Bambu mixed-filament display-color
+  reconstruction shared by planning, export validation and preview.
 - `Sources/FullSpectrumStudio`: native macOS SwiftUI shell and SceneKit preview.
 - `desktop/full_spectrum_studio.py`: Windows/cross-platform desktop shell for the same engine.
 - `tests/test_engine.py`: regression and security tests using synthetic projects only.

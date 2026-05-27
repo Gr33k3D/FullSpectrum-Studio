@@ -24,6 +24,8 @@ from array import array
 from pathlib import Path
 from itertools import combinations
 from collections import Counter, defaultdict
+from functools import lru_cache
+from bambu_mixer_model import blend_color_multi as bambu_blend_color_multi
 
 BAMBU_PLA = [
     ("PLA Matte Ivory White", "#FFFFFF"),
@@ -78,6 +80,7 @@ R3 = [(.6,.2,.2),(.2,.6,.2),(.2,.2,.6),(.5,.3,.2),(.5,.2,.3),(.3,.5,.2),(.2,.5,.
 MIN_ANCHOR_DE = 7.0
 DIRECT_ANCHOR_DE = 4.5
 MIN_MIX_GAIN = 1.0
+MAX_RELIABLE_MIX_DE = 8.0
 CMYKW_ROLE_WARNING_DE = 10.0
 MAX_BAMBU_PAINT_SLOT = 32
 PREVIEW_GRID_RESOLUTION = 72
@@ -88,9 +91,10 @@ MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REFERENCE_BYTES = 600 * 1024 * 1024
 MAX_IMPORT_FACES = 2_000_000
 MAX_INTERACTIVE_PREVIEW_TRIANGLES = 750_000
-OUTPUT_VERSION = "v0.4.2"
+OPTIMIZED_PREVIEW_GRID_RESOLUTION = 72
+OUTPUT_VERSION = "v0.4.3"
 DEFAULT_QUALITY_BIAS = 60
-MIX_MODELS = ("perceptual", "optical-screen")
+MIX_MODELS = ("bambu",)
 HEX_DIGITS = "0123456789ABCDEF"
 PAINT_PATTERN = re.compile(r'paint_color="([^"]+)"')
 PAINT_BYTES_PATTERN = re.compile(br'paint_color="[^"]+"')
@@ -192,29 +196,30 @@ def dist(a,b):
     return delta_e_2000(rgb_to_lab(*rgb(a)), rgb_to_lab(*rgb(b)))
 def luminance(h):
     r,g,b=rgb(h); return .2126*r+.7152*g+.0722*b
-def perceptual_mix(hexes, ratios):
-    l_acc=a_acc=b_acc=0.0
-    for h,w in zip(hexes,ratios):
-        lightness,a_value,b_value=rgb_to_lab(*rgb(h))
-        l_acc+=lightness*w
-        a_acc+=a_value*w
-        b_acc+=b_value*w
-    return tohex(*lab_to_rgb(l_acc,a_acc,b_acc))
-def optical_screen_mix(hexes, ratios, n=1.7):
-    """
-    An uncalibrated Yule-Nielsen-style screen estimate for alternating color
-    exposure. It is a planning preview only, not borrowed filament calibration.
-    """
-    channels=[]
-    for channel in range(3):
-        reflectance=sum(weight*((rgb(color)[channel]/255.0)**(1/n))
-                        for color,weight in zip(hexes,ratios))**n
-        channels.append(reflectance*255.0)
-    return tohex(*channels)
-def mix(hexes, ratios, model="perceptual"):
-    # Physical appearance still depends on material, layer height, surface and
-    # printer calibration; neither bundled estimate represents measured stock.
-    return optical_screen_mix(hexes,ratios) if model=="optical-screen" else perceptual_mix(hexes,ratios)
+def serialized_ratio_text(ratios):
+    return ",".join(f"{float(value):.4f}" for value in ratios)
+
+def bambu_ratio_weights(ratios):
+    text=ratios if isinstance(ratios,str) else serialized_ratio_text(ratios)
+    # Bambu Studio serializes normalized ratios to four decimals, then loads
+    # them as integer percentages before computing the mixed swatch.
+    output=[]
+    for value in text.split(","):
+        if not value.strip():
+            continue
+        parsed=struct.unpack("<f",struct.pack("<f",float(value)))[0]
+        rounded=struct.unpack("<f",struct.pack("<f",parsed*100.0+0.5))[0]
+        output.append(int(rounded))
+    return output
+
+@lru_cache(maxsize=8192)
+def cached_bambu_mix(hexes, weights):
+    return bambu_blend_color_multi(hexes,weights)
+
+def mix(hexes, ratios, model="bambu"):
+    """Return the exact swatch Bambu Studio reconstructs for a mixed recipe."""
+    weights=tuple(bambu_ratio_weights(ratios))
+    return cached_bambu_mix(tuple(hx(color) for color in hexes),weights)
 
 def choose_file():
     try:
@@ -318,7 +323,7 @@ def colors_from_project(obj):
                 out.append(hx(x).upper())
     return out
 
-def preview_colors_from_project(obj, mix_model="perceptual"):
+def preview_colors_from_project(obj, mix_model="bambu"):
     colors=colors_from_project(obj)
     mixed=obj.get("filament_is_mixed",[])
     components=obj.get("filament_mixed_components",[])
@@ -328,9 +333,10 @@ def preview_colors_from_project(obj, mix_model="perceptual"):
             continue
         try:
             slots=[int(value) for value in components[index].split(",") if value.strip()]
-            weights=[float(value) for value in ratios[index].split(",") if value.strip()]
+            ratio_text=ratios[index]
+            weights=bambu_ratio_weights(ratio_text)
             if len(slots)==len(weights) and slots and all(1<=slot<=len(colors) for slot in slots):
-                colors[index]=mix([colors[slot-1] for slot in slots],weights,mix_model)
+                colors[index]=mix([colors[slot-1] for slot in slots],ratio_text,mix_model)
         except ValueError:
             continue
     return colors
@@ -340,6 +346,50 @@ def profile_for_anchor(name):
         if name.startswith(family):
             return values
     return PROFILE_BY_FAMILY["PLA Basic"]
+
+def filament_family(name):
+    return next((family for family in PROFILE_BY_FAMILY if name == family or name.startswith(f"{family} ")), "PLA Basic")
+
+@lru_cache(maxsize=1)
+def installed_bambu_color_names():
+    roots=[
+        Path.home()/"Library"/"Application Support"/"BambuStudioBeta",
+        Path.home()/"Library"/"Application Support"/"BambuStudio",
+    ]
+    if os.name == "nt" and os.environ.get("APPDATA"):
+        roots=[
+            Path(os.environ["APPDATA"])/"BambuStudioBeta",
+            Path(os.environ["APPDATA"])/"BambuStudio",
+        ]
+    names={}
+    for root in roots:
+        catalog=root/"system"/"BBL"/"filament"/"filaments_color_codes.json"
+        if not catalog.exists():
+            continue
+        try:
+            rows=json.loads(catalog.read_text(errors="replace")).get("data",[])
+        except (OSError, ValueError, AttributeError):
+            continue
+        for row in rows:
+            if not isinstance(row,dict):
+                continue
+            series=str(row.get("fila_type") or "").strip()
+            english=(row.get("fila_color_name") or {}).get("en")
+            if not series or not english:
+                continue
+            for color in row.get("fila_color") or []:
+                names.setdefault((series,hx(color)),f"{series} {english}")
+    return names
+
+def official_filament_name(series, color):
+    normalized=hx(color)
+    installed=installed_bambu_color_names().get((series,normalized))
+    if installed:
+        return installed
+    return next(
+        (name for name,candidate in BAMBU_PLA if filament_family(name)==series and hx(candidate)==normalized),
+        f"{series} {normalized}",
+    )
 
 def read_bambu_inventory(required=True, minimum_colors=MIN_REAL_SLOTS):
     inventory_match=next(((label,path) for label,path in BAMBU_INVENTORY_LOCATIONS if path.exists()),None)
@@ -363,7 +413,7 @@ def read_bambu_inventory(required=True, minimum_colors=MIN_REAL_SLOTS):
         series=str(raw.get("series") or "PLA Basic").strip()
         setting_id=str(raw.get("setting_id") or profile_for_anchor(series)[1]).strip()
         color_name=str(raw.get("color_name") or "").strip()
-        display_name=f"{series} {color_name or color}".strip()
+        display_name=f"{series} {color_name}".strip() if color_name else official_filament_name(series,color)
         spools.append({
             "name":display_name,
             "series":series,
@@ -406,7 +456,7 @@ def catalog_palette(scope="core", inventory=None):
         preset,filament_id=profile_for_anchor(name)
         options.append({
             "name":name,
-            "series":name.rsplit(" ",1)[0],
+            "series":filament_family(name),
             "brand":"Bambu Lab",
             "color":hx(color),
             "preset":preset,
@@ -981,7 +1031,7 @@ def project_mesh_metrics(archive):
         "previewBuildEstimateSeconds":preview_seconds,
     }
 
-def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_model="perceptual", texture_override=None,
+def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_model="bambu", texture_override=None,
                     progress=lambda fraction,message: None, metadata_only=False):
     infile=Path(infile).expanduser().resolve()
     if infile.suffix.lower() in (".obj",".glb"):
@@ -1025,9 +1075,15 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_mod
         preview_mesh=None
         preview_notice=None
         if preview_mesh_dest and metrics and metrics["triangleCount"] > MAX_INTERACTIVE_PREVIEW_TRIANGLES:
+            metrics["previewBuildEstimateSeconds"]=round(max(0.1,metrics["triangleCount"]/160000),1)
+            progress(0.72,"Building optimized preview for large model")
+            preview_mesh=export_preview_mesh(
+                archive,preview_colors_from_project(obj,mix_model),preview_mesh_dest,
+                grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION,
+            )
             preview_notice=(
-                f"Interactive preview skipped for {metrics['triangleCount']:,} triangles "
-                "to keep memory and loading time practical. Plate preview remains available."
+                "Using optimized preview for large models. "
+                "The full surface was reduced to an efficient display mesh."
             )
         elif preview_mesh_dest and not metadata_only:
             preview_mesh=export_preview_mesh(archive, preview_colors_from_project(obj,mix_model), preview_mesh_dest)
@@ -1161,7 +1217,8 @@ def write_preview_materials(path, colors, material_prefix):
             red,green,blue=(channel/255.0 for channel in rgb(color))
             output.write(f"newmtl {material_prefix}_{slot}\nKd {red:.4f} {green:.4f} {blue:.4f}\nKa {red*.16:.4f} {green*.16:.4f} {blue*.16:.4f}\nNs 22\n\n")
 
-def export_preview_mesh(archive, colors, destination, material_prefix="slot"):
+def export_preview_mesh(archive, colors, destination, material_prefix="slot",
+                        grid_resolution=PREVIEW_GRID_RESOLUTION):
     """
     Write a reduced, colored viewport mesh without altering print geometry.
     Object XML can be hundreds of megabytes, so this reads line-oriented 3MF
@@ -1201,7 +1258,7 @@ def export_preview_mesh(archive, colors, destination, material_prefix="slot"):
         return None
 
     max_extent=max(high[axis]-low[axis] for axis in range(3)) or 1.0
-    cell=max_extent/PREVIEW_GRID_RESOLUTION
+    cell=max_extent/max(8,int(grid_resolution))
     clustered={}
     display_vertices=[]
     display_faces={}
@@ -1245,6 +1302,7 @@ def export_preview_mesh(archive, colors, destination, material_prefix="slot"):
         output.write("# Reduced viewport mesh generated from painted 3MF facets.\n")
         for x,y,z in display_vertices:
             output.write(f"v {x:.5f} {y:.5f} {z:.5f}\n")
+        output.write("s 1\n")
         for slot in sorted(faces_by_slot):
             output.write(f"usemtl {material_prefix}_{slot}\n")
             for first,second,third in faces_by_slot[slot]:
@@ -1275,7 +1333,7 @@ def nearest_anchor_error(color, anchors):
     return min((dist(color,anchor_color(anchor)),i+1,anchor_name(anchor),anchor_color(anchor))
                for i,anchor in enumerate(anchors))
 
-def best_mix_recipe(color, anchors, mix_model="perceptual", allow_three=True):
+def best_mix_recipe(color, anchors, mix_model="bambu", allow_three=True):
     ah=[anchor_color(anchor) for anchor in anchors]
     best_err=999999.0; best=None
     for i,j in combinations(range(len(anchors)),2):
@@ -1310,7 +1368,7 @@ def select_cmykw_anchors(pool, count):
     return selected
 
 def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slots="auto",
-                   custom_catalog_path=None, reference=None, mix_model="perceptual",
+                   custom_catalog_path=None, reference=None, mix_model="bambu",
                    quality_bias=DEFAULT_QUALITY_BIAS):
     requested=None if str(real_slots)=="auto" else int(real_slots)
     minimum=4 if mode=="cmykw" else MIN_REAL_SLOTS
@@ -1344,7 +1402,9 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
             direct=min(dist(c,a) for a in ah)
             pair=direct
             for i,j in combinations(range(len(ah)),2):
-                pair=min(pair,dist(c,mix([ah[i],ah[j]],[.5,.5],mix_model)))
+                candidate=dist(c,mix([ah[i],ah[j]],[.5,.5],mix_model))
+                if candidate<=MAX_RELIABLE_MIX_DE:
+                    pair=min(pair,candidate)
             s+=(w/target_total)*pair
         lums=[luminance(a) for a in ah]
         if max(lums)<210: s+=12
@@ -1401,13 +1461,14 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
         for _,color,weight in used:
             direct=nearest_anchor_error(color,anchors)[0]
             mix_error=best_mix_recipe(color,anchors,mix_model,quality_bias>=70)[3]
-            weighted+=(weight/total)*min(direct,mix_error)
+            printable_error=mix_error if mix_error<=MAX_RELIABLE_MIX_DE else direct
+            weighted+=(weight/total)*min(direct,printable_error)
         # A new physical slot must buy noticeable visual improvement.
         physical_penalty=(count-minimum)*(1.35-(max(0,min(100,quality_bias))/100)*0.9)
         trials.append((weighted+physical_penalty,weighted,anchors))
     return min(trials,key=lambda trial:trial[0])[2]
 
-def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_BIAS, mix_model="perceptual"):
+def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_BIAS, mix_model="bambu"):
     real_count=len(anchors)
     newc=[anchor_color(anchor) for anchor in anchors]
     ism=["0"]*real_count; comps=[""]*real_count; ratios=[""]*real_count
@@ -1426,7 +1487,7 @@ def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_
         old_slot_to_new_slot[old_slot]=direct_slot
         rows_by_slot[old_slot]=[old_slot,direct_slot,target,"ANCHOR",direct_name,"","",
                                 direct_hex,f"{direct_err:.2f}",f"{direct_err:.2f}","0.00"]
-        if direct_err>DIRECT_ANCHOR_DE and gain>=min_gain:
+        if direct_err>DIRECT_ANCHOR_DE and gain>=min_gain and mix_err<=MAX_RELIABLE_MIX_DE:
             mix_candidates.append((gain*weight,gain,old_slot,target,cs,rs,preview,mix_err,direct_err))
     recipes={}
     for _,gain,old_slot,target,cs,rs,preview,mix_err,direct_err in sorted(mix_candidates,reverse=True):
@@ -1468,7 +1529,7 @@ def heatmap_color(error):
     ratio=min(1.0,(error-6.0)/12.0)
     return tohex(245,215-141*ratio,37-6*ratio)
 
-def quality_metrics(rows, usage, old_colors=None, reference=None, mix_model="perceptual"):
+def quality_metrics(rows, usage, old_colors=None, reference=None, mix_model="bambu"):
     fallback=0 if usage else 1
     weights={slot:float(usage.get(slot,fallback)) for slot,*_ in rows}
     total=sum(weights.values()) or 1.0
@@ -1508,7 +1569,7 @@ def quality_metrics(rows, usage, old_colors=None, reference=None, mix_model="per
         result["referenceSimilarityScore"]=round(max(0.0,100.0-error*2.2),1)
         result["referenceEstimatedDeltaE"]=round(error,2)
     mixed_weight=sum(weights[row[0]] for row in rows if row[3]=="MIX")/total
-    confidence=94.0-estimated*1.15-mixed_weight*(18 if mix_model=="optical-screen" else 13)
+    confidence=94.0-estimated*1.15-mixed_weight*13
     if not reference or not reference.get("dominantColors"):
         confidence-=8
     if any(row[3]=="MIX" and len(row[5].split(","))>2 for row in rows):
@@ -1858,6 +1919,38 @@ def validate_arrays(obj,newn,real_count,layouts,source_off_diagonal_zeros=None):
         if any(r<=0 or r>=1 for r in rs) or abs(sum(rs)-1)>0.01:
             raise RuntimeError(f"Mixed slot {i+1} ratios are invalid")
 
+def validate_bambu_color_sync(obj, real_count):
+    colors=[hx(value) for value in obj.get("filament_colour",[])]
+    multi=[hx(value) for value in obj.get("filament_multi_colour",[])]
+    if len(colors) != len(multi) or colors != multi:
+        raise RuntimeError("filament_colour and filament_multi_colour are not synchronized")
+    reconstructed=preview_colors_from_project(obj)
+    entries=[]
+    for index in range(real_count,len(colors)):
+        expected=reconstructed[index]
+        stored=colors[index]
+        stored_multi=multi[index] if index < len(multi) else ""
+        delta=dist(stored,expected)
+        entries.append({
+            "slot":index+1,
+            "exported":stored,
+            "bambuLoaded":expected,
+            "deltaE":round(delta,2),
+            "components":obj["filament_mixed_components"][index],
+            "ratios":obj["filament_mixed_sublayer_ratios"][index],
+        })
+        if stored != expected or stored_multi != expected:
+            raise RuntimeError(
+                f"Mixed slot {index+1} color is not Bambu-reconstructed: "
+                f"saved {stored}/{stored_multi}, expected {expected}"
+            )
+    return {
+        "predictionModel":"Bambu Studio FilamentMixer pigment reconstruction",
+        "verified":True,
+        "maximumDeltaE":round(max((entry["deltaE"] for entry in entries),default=0.0),2),
+        "entries":entries,
+    }
+
 def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_zeros=None,
                             preservation=None, expected_paint_counts=None):
     with zipfile.ZipFile(outfile) as archive:
@@ -1867,6 +1960,7 @@ def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_
             raise RuntimeError("Written archive has no project_settings.config")
         obj,_=json.JSONDecoder().raw_decode(archive.read(psrel).decode("utf-8", errors="replace").lstrip())
         validate_arrays(obj,newn,real_count,layouts,source_off_diagonal_zeros)
+        color_validation=validate_bambu_color_sync(obj,real_count)
         paint_codes, paint_counts=collect_archive_paint_codes(archive)
         if expected_paint_counts is not None and paint_counts != expected_paint_counts:
             raise RuntimeError("Paint remap validation failed: output states differ from the decoded expected mapping")
@@ -1882,11 +1976,11 @@ def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_
         preservation_result=verify_preservation(archive,preservation) if preservation else None
         if preservation_result is not None:
             preservation_result["paintRemapVerified"]=expected_paint_counts is not None
-    return paint_codes, usage, preservation_result
+    return paint_codes, usage, preservation_result, color_validation
 
 def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=True, real_slots="auto",
             reference=None, custom_catalog_path=None, quality_bias=DEFAULT_QUALITY_BIAS,
-            mix_model="perceptual", analysis_dir=None, texture_override=None,
+            mix_model="bambu", analysis_dir=None, texture_override=None,
             internal_colors=48, progress=lambda fraction,message: None):
     infile=Path(infile).expanduser().resolve()
     quality_bias=max(0,min(100,int(quality_bias)))
@@ -1898,6 +1992,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
     outfile=downloads/f"{infile.stem}_FullSpectrum_{suffix}_{OUTPUT_VERSION}.3mf"
     csvfile=downloads/f"{infile.stem}_FullSpectrum_{suffix}_{OUTPUT_VERSION}_recipe.csv"
     report=downloads/f"{infile.stem}_FullSpectrum_{suffix}_{OUTPUT_VERSION}_report.txt"
+    color_report=downloads/f"{infile.stem}_FullSpectrum_{suffix}_{OUTPUT_VERSION}_COLOR_VALIDATION.md"
     tmp=Path(tempfile.mkdtemp(prefix="fullspectrum_"))
     reference_tmp=Path(tempfile.mkdtemp(prefix="fsreference_"))
     import_tmp=Path(tempfile.mkdtemp(prefix="fsimport_"))
@@ -1995,6 +2090,16 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         pspath.write_text(json.dumps(obj,indent=2,ensure_ascii=True))
         quality=quality_metrics(rows,usage,old,reference_result,mix_model)
         printability=printability_metrics(rows,usage,real_count,newn,layouts,obj)
+        unmatched=[
+            row for row in rows
+            if usage.get(row[0],0)>0 and float(row[8])>MAX_RELIABLE_MIX_DE
+        ]
+        if unmatched:
+            warnings.append(
+                f"{len(unmatched)} painted colors have no reliable match within Delta E "
+                f"{MAX_RELIABLE_MIX_DE:.0f}; nearest physical colors were kept instead "
+                "of creating misleading mixed recipes. Add closer filament colors for these regions."
+            )
         recommendation=additional_anchor_recommendation(
             old,usage,anchors,palette_source,inventory,custom_catalog_path,
             quality_bias,mix_model,quality
@@ -2005,8 +2110,6 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
                 f"Delta E reduction {recommendation['estimatedDeltaEReduction']:.2f} with "
                 f"{recommendation['estimatedMixedSlots']} mixed slots; {recommendation['availability']}."
             )
-        if mix_model=="optical-screen":
-            warnings.append("Optical-screen prediction is experimental and uncalibrated; validate it with a small material test.")
         if mode=="cmykw" and palette_source=="inventory":
             poor=[role for anchor,(role,target) in zip(anchors,CMYK_TARGETS)
                   if dist(anchor_color(anchor),target)>CMYKW_ROLE_WARNING_DE]
@@ -2019,7 +2122,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         with zipfile.ZipFile(staged_outfile,"w",zipfile.ZIP_DEFLATED) as z:
             for p in tmp.rglob("*"):
                 if p.is_file(): z.write(p,p.relative_to(tmp).as_posix())
-        output_codes, output_usage, preserved=validate_output_archive(
+        output_codes, output_usage, preserved, color_validation=validate_output_archive(
             staged_outfile,newn,real_count,layouts,source_off_diagonal_zeros,preservation,expected_counts
         )
         if outfile.exists(): outfile.unlink()
@@ -2033,24 +2136,81 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             with zipfile.ZipFile(outfile) as written:
                 analysis_metrics=project_mesh_metrics(written)
                 if analysis_metrics["triangleCount"] > MAX_INTERACTIVE_PREVIEW_TRIANGLES:
-                    heatmap=None
+                    progress(0.84,"Building optimized preview overlays for large model")
+                    heatmap=export_preview_mesh(
+                        written,heat_colors,analysis_root/"color-loss.obj","loss",
+                        grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION,
+                    )
                     warnings.append(
-                        f"Analysis overlays skipped for {analysis_metrics['triangleCount']:,} triangles "
-                        "to keep memory and loading time practical."
+                        "Using optimized preview overlays for large model; "
+                        "full source geometry was reduced only for display."
                     )
                 else:
+                    progress(0.84,"Building analysis preview overlays")
                     heatmap=export_preview_mesh(written,heat_colors,analysis_root/"color-loss.obj","loss")
             influence=(recolor_preview_mesh(heatmap,influence_colors,analysis_root/"anchor-influence.obj","loss")
                        if heatmap else None)
+            predicted=(recolor_preview_mesh(heatmap,newc,analysis_root/"predicted.obj","loss")
+                       if heatmap else None)
             analysis_assets={
+                "predictedMesh":str(predicted) if predicted else None,
                 "heatmapMesh":str(heatmap) if heatmap else None,
                 "anchorInfluenceMesh":str(influence) if influence else None,
             }
 
         with open(csvfile,"w",newline="") as f:
             w=csv.writer(f)
-            w.writerow(["old_slot","new_slot","target_color","kind","recipe_label","component_ids","ratios","predicted_color","estimated_deltaE","direct_deltaE","visual_gain"])
+            w.writerow(["old_slot","new_slot","target_color","kind","recipe_label","component_ids","ratios","bambu_reconstructed_color","estimated_deltaE","direct_deltaE","visual_gain"])
             w.writerows(rows)
+        color_by_slot={entry["slot"]:entry for entry in color_validation["entries"]}
+        color_debug=[]
+        for row in rows:
+            old_slot,new_slot,target,kind,label,component_ids,ratio_text,preview,error,direct_error,gain=row
+            if kind!="MIX":
+                continue
+            loaded=color_by_slot[new_slot]["bambuLoaded"]
+            color_debug.append({
+                "oldSlot":old_slot,
+                "newSlot":new_slot,
+                "target":target,
+                "appPrediction":preview,
+                "exported":newc[new_slot-1],
+                "bambuLoaded":loaded,
+                "targetDeltaE":round(dist(target,loaded),2),
+                "predictionDeltaE":round(dist(preview,loaded),2),
+                "components":component_ids,
+                "ratios":ratio_text,
+            })
+        color_validation["recipes"]=color_debug
+        color_report.write_text("\n".join([
+            "# Color Validation",
+            "",
+            f"Output: `{outfile.name}`",
+            "",
+            "## Result",
+            "",
+            "- Prediction model: Bambu Studio `FilamentMixer` pigment reconstruction.",
+            "- Mixed recipes are reconstructed from physical component slots and the serialized ratio percentages.",
+            f"- Maximum app/export versus Bambu reconstructed difference: Delta E {color_validation['maximumDeltaE']:.2f}.",
+            "- Validation status: PASS. The archive was reopened after writing and its mixed slot colors were checked.",
+            "",
+            "## Mixed Color Debug",
+            "",
+            "| Source | Output | Target | App / Export | Bambu reconstructed | Delta E target | Delta E sync | Recipe |",
+            "| ---: | ---: | --- | --- | --- | ---: | ---: | --- |",
+            *[
+                f"| {entry['oldSlot']} | {entry['newSlot']} | {entry['target']} | "
+                f"{entry['appPrediction']} | {entry['bambuLoaded']} | {entry['targetDeltaE']:.2f} | "
+                f"{entry['predictionDeltaE']:.2f} | {entry['components']} @ {entry['ratios']} |"
+                for entry in color_debug
+            ],
+            "",
+            "## Known Mismatch Causes",
+            "",
+            "- Older FullSpectrum outputs used a separate perceptual estimate for mixed swatches; Bambu recomputed a different color on load.",
+            "- Bambu uses integer percentage weights decoded from the saved four-decimal ratios; evaluating unrounded ratios can select a different swatch.",
+            "- A material test print can still differ from the UI because filament translucency, layer height, surface and lighting are physical variables.",
+        ]))
         report.write_text("\n".join([
             "FullSpectrum Studio conversion and validation report",
             f"Mode: {mode}",
@@ -2069,9 +2229,9 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             f"Remapped object/part extruder assignments: {remapped_extruders}",
             f"Palette source: {palette_source}",
             f"Quality versus waste priority: {quality_bias} / 100",
-            f"Mixed-color prediction: {mix_model} (unmeasured planning estimate)",
-            f"Inventory source: {'local Bambu Studio Beta inventory (read only)' if inventory['source'] else 'not used for this palette source'}",
-            f"Available PLA inventory: {inventory['usableCount']} spools / {inventory['totalGrams']:.0f} g",
+            "Mixed-color prediction: Bambu Studio FilamentMixer reconstruction",
+            f"Mixed-color synchronization after reopen: Delta E {color_validation['maximumDeltaE']:.2f} (verified)",
+            f"Inventory source: {'local Bambu Studio inventory selected (quantity details remain in the app only)' if inventory['source'] else 'not used for this palette source'}",
             f"Introduced off-diagonal zero purge transitions: 0",
             f"Estimated mean Delta E: {quality['estimatedDeltaE']:.2f}",
             f"Estimated quality score: {quality['qualityScore']:.1f} / 100",
@@ -2093,13 +2253,13 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "",
             "Anchors:",
             *[f"{i+1}: {anchor_name(anchor)} {anchor_color(anchor)} [{real_profiles[i][0]} / {real_profiles[i][1]}]"
-              + (f" {anchor['remainingGrams']:.0f} g available" if anchor["remainingGrams"] is not None else " catalog option")
+              + (" owned filament" if anchor["remainingGrams"] is not None else " catalog option")
               for i,anchor in enumerate(anchors)],
             "",
             *(["Warnings:", *warnings, ""] if warnings else []),
             "Validation: OK",
             "Paint mapping decoded and re-encoded from BambuStudio serialized extruder states.",
-            "Written 3MF reopened successfully; paint references, mixed slots, filament arrays and preserved resources validated."
+            "Written 3MF reopened successfully; paint references, mixed slots, Bambu color reconstruction, filament arrays and preserved resources validated."
         ]))
 
         progress(0.96,f"Validated and saved {outfile.name}")
@@ -2133,6 +2293,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "output":str(outfile),
             "csv":str(csvfile),
             "report":str(report),
+            "colorValidationReport":str(color_report),
             "mode":mode,
             "paletteSource":palette_source,
             "sourceSlots":oldn,
@@ -2141,6 +2302,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "validation":"OK",
             "paintedSlots":sorted(output_usage),
             "quality":quality,
+            "colorValidation":color_validation,
             "printability":printability,
             "recommendation":recommendation,
             "preservation":preserved,
@@ -2179,8 +2341,8 @@ def main():
     parser.add_argument("--custom-palette",help="JSON filament library for --palette-source custom")
     parser.add_argument("--quality-bias",type=int,default=DEFAULT_QUALITY_BIAS,
                         help="Quality versus waste priority from 0 (fewer mixes) to 100 (more detail)")
-    parser.add_argument("--mix-model",choices=MIX_MODELS,default="perceptual",
-                        help="Planning-only predicted mixed-color model")
+    parser.add_argument("--mix-model",choices=MIX_MODELS,default="bambu",
+                        help="Mixed-color model used for planning, export and preview")
     parser.add_argument("--analysis-dir",help="Optional local destination for heatmap and anchor-influence preview meshes")
     parser.add_argument("--texture",help="PNG/JPEG texture override used with experimental OBJ import")
     parser.add_argument("--internal-colors",type=int,default=48,
@@ -2245,8 +2407,11 @@ def main():
             print(json.dumps(result,indent=2))
         return 0
     except Exception as e:
-        import traceback
-        print("ERROR:",e,file=sys.stderr); traceback.print_exc(file=sys.stderr); return 1
+        print("ERROR:",e,file=sys.stderr)
+        if os.environ.get("FULLSPECTRUM_DEBUG") == "1":
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+        return 1
 
 if __name__=="__main__":
     raise SystemExit(main())

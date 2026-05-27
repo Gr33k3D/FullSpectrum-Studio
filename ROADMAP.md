@@ -1,14 +1,16 @@
 # Roadmap
 
-## Current: 0.4 Community Preview
+## Current: 0.4.3 Community Preview
 
 Shipping now:
 
 - Validated painted `.3mf` conversion with decoded Bambu paint remapping.
 - Inventory, Bambu planning, exact CMYKW and custom filament sources.
-- CIEDE2000 scoring, adaptive physical anchors and gain-limited mixed recipes.
+- CIEDE2000 scoring, adaptive physical anchors and Bambu-reconstructed,
+  reliability-gated mixed recipes.
 - Confidence, contrast and printability complexity reporting.
-- Original, reduced/predicted, heatmap, anchor-influence and wireframe native views.
+- Viewer-centered original, reduced/predicted, validation, heatmap,
+  anchor-influence and wireframe native views with optimized large-model fallback.
 - Experimental constrained textured OBJ/GLB to validated `.3mf` conversion.
 - macOS application and Windows portable/installer packaging.
 

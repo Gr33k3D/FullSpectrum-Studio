@@ -5,9 +5,11 @@
 dist/
 verification/
 release/
-teasers/
 *.3mf
 *.zip
 *_recipe.csv
 *_report.txt
 FullSpectrum_Stable_v12_BAMBU_PAINT_STATE_FIXED/
+FullSpectrum-Forum-Images/
+# Only the curated v0.4.3 screenshots are intended for public documentation.
+teasers/full-spectrum-angel-*.png

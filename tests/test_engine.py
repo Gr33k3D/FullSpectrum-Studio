@@ -136,6 +136,40 @@ class PaintCodecTests(unittest.TestCase):
         self.assertAlmostEqual(difference, 2.0425, places=3)
 
 
+class BambuColorModelTests(unittest.TestCase):
+    def test_bambu_reconstruction_color_regressions(self):
+        cases = {
+            "purple": (["#EC008C", "#0A2E8A"], "#6E0D92"),
+            "green": (["#00AEEF", "#F4EE2A"], "#5EE569"),
+            "orange": (["#C12E1F", "#F4EE2A"], "#E27B34"),
+            "neutral": (["#000000", "#FFFFFF"], "#647DA0"),
+            "dark": (["#042F56", "#482960"], "#222C61"),
+        }
+        for name, (colors, expected) in cases.items():
+            with self.subTest(name=name):
+                self.assertEqual(ENGINE.mix(colors, [0.5, 0.5]), expected)
+
+    def test_preview_reconstructs_bambu_loaded_angel_swatches(self):
+        physical = ["#F7E6DE", "#042F56", "#7D6556", "#E8DBB7", "#BA9594", "#F7D959"]
+        expected = ["#CFB9AC", "#D5BA72", "#BBA496", "#A08D59", "#E0C569", "#B3A05A",
+                    "#9C8574", "#2C587C", "#578FA1", "#978358", "#496986", "#16405D",
+                    "#5D95B6", "#2C746A", "#96B8B1", "#50926A", "#3677A0", "#236488"]
+        components = ["1,3", "5,6", "1,3", "3,6", "5,6", "3,6", "1,3", "2,5", "2,4",
+                      "3,6", "2,5", "2,3", "1,2", "2,6", "2,4", "2,6", "1,2", "2,4"]
+        ratios = ["0.6667,0.3333", "0.5000,0.5000", "0.5000,0.5000", "0.6667,0.3333",
+                  "0.3333,0.6667", "0.5000,0.5000", "0.2500,0.7500", "0.6667,0.3333",
+                  "0.5000,0.5000", "0.7500,0.2500", "0.5000,0.5000", "0.7500,0.2500",
+                  "0.5000,0.5000", "0.6667,0.3333", "0.2500,0.7500", "0.5000,0.5000",
+                  "0.3333,0.6667", "0.7500,0.2500"]
+        obj = settings(24)
+        obj["filament_colour"] = physical + ["#000000"] * len(expected)
+        obj["filament_multi_colour"] = obj["filament_colour"][:]
+        obj["filament_is_mixed"] = ["0"] * 6 + ["1"] * len(expected)
+        obj["filament_mixed_components"] = [""] * 6 + components
+        obj["filament_mixed_sublayer_ratios"] = [""] * 6 + ratios
+        self.assertEqual(ENGINE.preview_colors_from_project(obj)[6:], expected)
+
+
 class ArchiveSafetyTests(unittest.TestCase):
     def test_rejects_path_traversal(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -207,6 +241,9 @@ class ConversionTests(unittest.TestCase):
             self.assertTrue(output["preservation"]["paintRemapVerified"])
             self.assertIn("confidenceScore",output["quality"])
             self.assertIn("contrastRetention",output["quality"])
+            self.assertTrue(output["colorValidation"]["verified"])
+            self.assertEqual(output["colorValidation"]["maximumDeltaE"], 0.0)
+            self.assertTrue(Path(output["colorValidationReport"]).exists())
             self.assertTrue(output["printability"]["sliceRequiredForTimeAndUsage"])
             with zipfile.ZipFile(output["output"]) as archive:
                 generated = json.loads(archive.read("Metadata/project_settings.config"))
@@ -255,14 +292,24 @@ class ConversionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.3mf"
             reference = Path(folder) / "private-reference-name.bmp"
+            palette = Path(folder) / "local-owned-filaments.json"
             write_project(source)
             write_bmp(reference)
+            palette.write_text(json.dumps([
+                {"name": "Owned White", "color": "#FFFFFF", "remainingGrams": 500},
+                {"name": "Owned Black", "color": "#000000", "remainingGrams": 420},
+            ]))
             output = ENGINE.convert(
-                source, "official", "catalog", folder, False, "3", reference=reference
+                source, "official", "custom", folder, False, "2",
+                reference=reference, custom_catalog_path=palette
             )
             report = Path(output["report"]).read_text()
             self.assertIn("Reference type: Texture image", report)
             self.assertNotIn(reference.name, report)
+            self.assertNotIn("Available PLA inventory", report)
+            self.assertNotIn(" g available", report)
+            self.assertNotIn("500", report)
+            self.assertNotIn("420", report)
 
     def test_analysis_meshes_are_emitted_for_loss_and_anchor_influence(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -290,7 +337,7 @@ class ConversionTests(unittest.TestCase):
             self.assertIsNone(inspected["previewMesh"])
             self.assertFalse(preview.exists())
 
-    def test_large_interactive_preview_is_skipped_under_resource_budget(self):
+    def test_large_interactive_preview_uses_optimized_fallback_under_resource_budget(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.3mf"
             preview = Path(folder) / "preview.obj"
@@ -301,11 +348,12 @@ class ConversionTests(unittest.TestCase):
                 inspected = ENGINE.inspect_project(source, preview_mesh_dest=preview)
             finally:
                 ENGINE.MAX_INTERACTIVE_PREVIEW_TRIANGLES = previous_limit
-            self.assertIsNone(inspected["previewMesh"])
-            self.assertIn("Interactive preview skipped", inspected["previewNotice"])
-            self.assertFalse(preview.exists())
+            self.assertIsNotNone(inspected["previewMesh"])
+            self.assertIn("Using optimized preview", inspected["previewNotice"])
+            self.assertTrue(preview.exists())
+            self.assertIn("s 1", preview.read_text())
 
-    def test_large_analysis_overlays_are_optional_under_resource_budget(self):
+    def test_large_analysis_overlays_use_optimized_fallback_under_resource_budget(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.3mf"
             write_project(source)
@@ -316,9 +364,10 @@ class ConversionTests(unittest.TestCase):
                                         analysis_dir=Path(folder) / "analysis")
             finally:
                 ENGINE.MAX_INTERACTIVE_PREVIEW_TRIANGLES = previous_limit
-            self.assertIsNone(output["analysisAssets"]["heatmapMesh"])
-            self.assertIsNone(output["analysisAssets"]["anchorInfluenceMesh"])
-            self.assertTrue(any("Analysis overlays skipped" in warning for warning in output["warnings"]))
+            self.assertTrue(Path(output["analysisAssets"]["heatmapMesh"]).exists())
+            self.assertTrue(Path(output["analysisAssets"]["anchorInfluenceMesh"]).exists())
+            self.assertTrue(Path(output["analysisAssets"]["predictedMesh"]).exists())
+            self.assertTrue(any("Using optimized preview overlays" in warning for warning in output["warnings"]))
             self.assertTrue(output["preservation"]["paintRemapVerified"])
 
     def test_reuses_equal_mix_recipe_instead_of_creating_duplicate_slots(self):
@@ -326,9 +375,24 @@ class ConversionTests(unittest.TestCase):
             {"name":"Black","color":"#000000"},
             {"name":"White","color":"#FFFFFF"},
         ]
-        palette=ENGINE.build_palette(["#777777","#777777"],anchors,{1:100,2:100},100)
+        reconstructable=ENGINE.mix(["#000000","#FFFFFF"],[0.5,0.5])
+        palette=ENGINE.build_palette([reconstructable,reconstructable],anchors,{1:100,2:100},100)
         self.assertEqual(len(palette[0]),3)
         self.assertEqual(palette[4][1],palette[4][2])
+
+    def test_rejects_misleading_mixed_recipe_even_when_it_beats_bad_anchors(self):
+        anchors=[
+            {"name":"Black","color":"#000000"},
+            {"name":"Pink","color":"#BA9594"},
+        ]
+        palette=ENGINE.build_palette(["#553B6A"],anchors,{1:100},100)
+        self.assertEqual(len(palette[0]),2)
+        self.assertEqual(palette[5][0][3],"ANCHOR")
+
+    def test_official_names_keep_multiword_family_and_known_catalog_color(self):
+        self.assertEqual(ENGINE.filament_family("PLA Matte Desert Tan"),"PLA Matte")
+        self.assertEqual(ENGINE.official_filament_name("PLA Matte","#E8DBB7"),"PLA Matte Desert Tan")
+        self.assertEqual(ENGINE.official_filament_name("PLA Basic","#000000"),"PLA Basic Black")
 
     def test_textured_obj_import_runs_through_validated_output(self):
         with tempfile.TemporaryDirectory() as folder_name:
@@ -381,6 +445,16 @@ class ConversionTests(unittest.TestCase):
         obj["flush_volumes_matrix"] = ["0", "0", "120", "0"]
         with self.assertRaisesRegex(RuntimeError, "zero off-diagonal"):
             ENGINE.validate_arrays(obj, 2, 2, {"flush_volumes_matrix": ("matrix", 1)}, None)
+
+    def test_validator_rejects_saved_mixed_color_that_bambu_will_replace(self):
+        obj = settings(3)
+        obj["filament_colour"] = ["#EC008C", "#0A2E8A", "#9D5AC4"]
+        obj["filament_multi_colour"] = obj["filament_colour"][:]
+        obj["filament_is_mixed"] = ["0", "0", "1"]
+        obj["filament_mixed_components"] = ["", "", "1,2"]
+        obj["filament_mixed_sublayer_ratios"] = ["", "", "0.5000,0.5000"]
+        with self.assertRaisesRegex(RuntimeError, "not Bambu-reconstructed"):
+            ENGINE.validate_bambu_color_sync(obj, 2)
 
     def test_predicted_preview_uses_mixed_color_estimate(self):
         obj = settings(3)
