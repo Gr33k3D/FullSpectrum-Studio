@@ -10,6 +10,7 @@ apps/windows-tauri/dist/
 apps/windows-tauri/node_modules/
 apps/windows-tauri/src-tauri/target/
 apps/windows-tauri/src-tauri/resources/
+apps/windows-tauri/src-tauri/gen/
 *.3mf
 *.zip
 *_recipe.csv

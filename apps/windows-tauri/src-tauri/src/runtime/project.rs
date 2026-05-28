@@ -29,8 +29,12 @@ pub fn metadata_for_path(path: Option<&str>) -> io::Result<ProjectMetadata> {
             selected_path: Some(path.to_string()),
             exists: false,
             kind: ProjectKind::Missing,
-            name: path_ref.file_name().map(|value| value.to_string_lossy().into_owned()),
-            extension: path_ref.extension().map(|value| value.to_string_lossy().into_owned()),
+            name: path_ref
+                .file_name()
+                .map(|value| value.to_string_lossy().into_owned()),
+            extension: path_ref
+                .extension()
+                .map(|value| value.to_string_lossy().into_owned()),
             size_bytes: None,
             modified_unix_ms: None,
             supported_input: false,
@@ -82,19 +86,26 @@ pub fn metadata_for_path(path: Option<&str>) -> io::Result<ProjectMetadata> {
     if supported_input {
         notes.push("Supported FullSpectrum input extension detected.".to_string());
     } else if metadata.is_dir() {
-        notes.push("Directory support is prepared for future project/workspace loading.".to_string());
+        notes.push(
+            "Directory support is prepared for future project/workspace loading.".to_string(),
+        );
     } else {
         notes.push("File type is not currently a supported FullSpectrum input.".to_string());
     }
     if matches!(extension.as_deref(), Some("3mf")) {
-        notes.push("TODO: parse Metadata/project_settings.config through the shared project loader.".to_string());
+        notes.push(
+            "TODO: parse Metadata/project_settings.config through the shared project loader."
+                .to_string(),
+        );
     }
 
     Ok(ProjectMetadata {
         selected_path: Some(path.to_string()),
         exists: true,
         kind,
-        name: path_ref.file_name().map(|value| value.to_string_lossy().into_owned()),
+        name: path_ref
+            .file_name()
+            .map(|value| value.to_string_lossy().into_owned()),
         extension,
         size_bytes: metadata.is_file().then_some(metadata.len()),
         modified_unix_ms: metadata
@@ -123,7 +134,7 @@ fn scan_directory(root: &Path) -> io::Result<DirectoryScan> {
     let mut stack = vec![root.to_path_buf()];
     let mut file_count = 0;
     let mut supported_file_count = 0;
-    let mut total_bytes = 0;
+    let mut total_bytes: u64 = 0;
     let mut assets = Vec::new();
     let mut truncated = false;
 

@@ -35,7 +35,7 @@
     "category": "GraphicsAndDesign",
     "shortDescription": "Local painted-project palette reduction and validation",
     "longDescription": "FullSpectrum Studio converts painted 3MF projects into reduced-filament printable projects while preserving paint mapping.",
-    "icon": ["icons/icon.ico"],
+    "icon": ["icons/icon.png", "icons/icon.ico"],
     "resources": [
       "resources/fullspectrum_engine.py",
       "resources/bambu_mixer_model.py"

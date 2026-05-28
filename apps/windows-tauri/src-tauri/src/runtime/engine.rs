@@ -1,7 +1,4 @@
-use super::{
-    logging::append_log,
-    models::ProjectInspection,
-};
+use super::{logging::append_log, models::ProjectInspection};
 use serde::Deserialize;
 use std::{
     ffi::OsStr,
@@ -114,7 +111,9 @@ fn locate_engine(app: &AppHandle) -> Result<PathBuf, EngineError> {
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for candidate in [
-        manifest_dir.join("resources").join("fullspectrum_engine.py"),
+        manifest_dir
+            .join("resources")
+            .join("fullspectrum_engine.py"),
         manifest_dir.join("../../../fullspectrum_engine.py"),
     ] {
         if candidate.exists() {

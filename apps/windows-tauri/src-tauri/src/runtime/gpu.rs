@@ -21,6 +21,7 @@ pub struct GpuInfo {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
+#[allow(dead_code)]
 pub enum GpuBackendPlan {
     Placeholder,
     Wgpu,
@@ -49,7 +50,9 @@ pub mod wgpu_probe {
             available: false,
             backend_plan: GpuBackendPlan::Wgpu,
             adapters: Vec::new(),
-            notes: vec!["wgpu feature enabled, but adapter probing is not implemented yet.".to_string()],
+            notes: vec![
+                "wgpu feature enabled, but adapter probing is not implemented yet.".to_string(),
+            ],
         }
     }
 }

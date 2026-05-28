@@ -28,7 +28,9 @@ pub fn get_runtime_paths() -> Result<RuntimePathsResponse, String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-pub fn select_project_directory(selected_path: Option<String>) -> Result<DirectorySelection, String> {
+pub fn select_project_directory(
+    selected_path: Option<String>,
+) -> Result<DirectorySelection, String> {
     let paths = prepare_runtime_paths().map_err(|error| error.to_string())?;
     let selected = selected_path.unwrap_or_else(|| paths.paths.projects_dir.clone());
     let metadata = metadata_for_path(Some(&selected)).map_err(|error| error.to_string())?;
@@ -51,7 +53,8 @@ pub fn inspect_project(
     path: String,
     metadata_only: Option<bool>,
 ) -> Result<ProjectInspection, String> {
-    let inspection = inspect_with_engine(&app, &path, metadata_only).map_err(|error| error.to_string())?;
+    let inspection =
+        inspect_with_engine(&app, &path, metadata_only).map_err(|error| error.to_string())?;
     let _ = append_log(
         "info",
         &format!(

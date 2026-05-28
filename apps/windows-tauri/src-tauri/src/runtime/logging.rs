@@ -36,7 +36,10 @@ pub fn append_log(level: &str, message: &str) -> io::Result<LogWriteResult> {
         normalized_level,
         message.replace('\n', " ")
     );
-    let mut file = OpenOptions::new().create(true).append(true).open(&log_path)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
     file.write_all(line.as_bytes())?;
     Ok(LogWriteResult {
         path: log_path.to_string_lossy().into_owned(),
