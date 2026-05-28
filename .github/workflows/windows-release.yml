@@ -41,7 +41,32 @@ jobs:
       - name: Run engine regression tests
         run: python -m unittest discover -s tests -v
       - name: Build portable application
-        run: pyinstaller --noconfirm --windowed --name FullSpectrumStudio --hidden-import bambu_mixer_model --add-data "fullspectrum_engine.py;." --add-data "bambu_mixer_model.py;." --add-data "LICENSE;." --add-data "THIRD_PARTY_NOTICES.md;." desktop/full_spectrum_studio.py
+        run: >
+          pyinstaller --noconfirm --windowed
+          --name FullSpectrumStudio
+          --hidden-import fullspectrum_engine
+          --hidden-import bambu_mixer_model
+          --hidden-import json
+          --hidden-import csv
+          --hidden-import hashlib
+          --hidden-import math
+          --hidden-import re
+          --hidden-import shutil
+          --hidden-import struct
+          --hidden-import subprocess
+          --hidden-import tempfile
+          --hidden-import zipfile
+          --hidden-import xml.etree.ElementTree
+          --hidden-import array
+          --hidden-import pathlib
+          --hidden-import itertools
+          --hidden-import collections
+          --hidden-import functools
+          --add-data "fullspectrum_engine.py;."
+          --add-data "bambu_mixer_model.py;."
+          --add-data "LICENSE;."
+          --add-data "THIRD_PARTY_NOTICES.md;."
+          desktop/full_spectrum_studio.py
       - name: Create portable ZIP
         shell: pwsh
         run: |
