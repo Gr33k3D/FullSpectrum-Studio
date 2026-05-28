@@ -5,6 +5,11 @@
 dist/
 verification/
 release/
+node_modules/
+apps/windows-tauri/dist/
+apps/windows-tauri/node_modules/
+apps/windows-tauri/src-tauri/target/
+apps/windows-tauri/src-tauri/resources/
 *.3mf
 *.zip
 *_recipe.csv

@@ -1,0 +1,29 @@
+{
+  "name": "fullspectrum-studio-windows-tauri",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "sync:engine": "node scripts/sync-engine.mjs",
+    "dev": "vite --host 127.0.0.1 --port 1420",
+    "build": "npm run sync:engine && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri:dev": "npm run sync:engine && tauri dev",
+    "tauri:build": "npm run sync:engine && tauri build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "@vitejs/plugin-react": "^4.5.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

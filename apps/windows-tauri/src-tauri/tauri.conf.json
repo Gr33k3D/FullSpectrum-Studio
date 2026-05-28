@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FullSpectrum Studio",
+  "version": "0.1.0",
+  "identifier": "com.fullspectrum.studio",
+  "mainBinaryName": "FullSpectrum Studio",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "FullSpectrum Studio",
+        "width": 1600,
+        "height": 900,
+        "minWidth": 980,
+        "minHeight": 720,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi"],
+    "publisher": "FullSpectrum Studio contributors",
+    "copyright": "Copyright FullSpectrum Studio contributors",
+    "category": "GraphicsAndDesign",
+    "shortDescription": "Local painted-project palette reduction and validation",
+    "longDescription": "FullSpectrum Studio converts painted 3MF projects into reduced-filament printable projects while preserving paint mapping.",
+    "icon": ["icons/icon.ico"],
+    "resources": [
+      "resources/fullspectrum_engine.py",
+      "resources/bambu_mixer_model.py"
+    ]
+  }
+}
