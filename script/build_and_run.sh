@@ -6,6 +6,8 @@ APP_NAME="FullSpectrum Studio"
 EXECUTABLE_NAME="FullSpectrumStudio"
 BUNDLE_ID="studio.fullspectrum.macos"
 MIN_SYSTEM_VERSION="14.0"
+APP_VERSION="${FULLSPECTRUM_VERSION:-0.4.3}"
+APP_BUILD="${FULLSPECTRUM_BUILD:-7}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -50,9 +52,9 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.4.3</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>7</string>
+  <string>$APP_BUILD</string>
   <key>CFBundleGetInfoString</key>
   <string>Community Preview - validated local reduced-filament workflow</string>
   <key>LSMinimumSystemVersion</key>

@@ -18,7 +18,12 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: Build and verify application bundle
         run: |
-          ./script/build_and_run.sh build
+          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${VERSION%-community-preview}"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          FULLSPECTRUM_VERSION="$VERSION" FULLSPECTRUM_BUILD="${GITHUB_RUN_NUMBER}" ./script/build_and_run.sh build
           codesign --verify --deep --strict --verbose=2 "dist/FullSpectrum Studio.app"
       - name: Create macOS ZIP
         run: |

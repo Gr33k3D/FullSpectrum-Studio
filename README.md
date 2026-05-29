@@ -10,9 +10,10 @@ The source project is never modified.
 This is an independent community preview built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest public package: [v0.4.5 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.5-community-preview).
-The v0.4.5 package refresh keeps the v0.4.3 color-correctness fix and rebuilds
-the Windows downloads with the repaired packaging workflow.
+Latest public package: [v0.4.6 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.6-community-preview).
+The v0.4.6 package refresh keeps the v0.4.3 color-correctness fix, rebuilds
+the Windows downloads with the repaired packaging workflow, and stamps the
+macOS app bundle version from the release tag.
 
 ## What It Does
 
