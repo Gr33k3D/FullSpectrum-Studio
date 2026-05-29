@@ -22,8 +22,13 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "dist/FullSpectrum Studio.app"
       - name: Create macOS ZIP
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${VERSION%-community-preview}"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
           mkdir -p release
-          ditto -c -k --sequesterRsrc --keepParent "dist/FullSpectrum Studio.app" "release/FullSpectrum-Studio-macOS-v0.4.3.zip"
+          ditto -c -k --sequesterRsrc --keepParent "dist/FullSpectrum Studio.app" "release/FullSpectrum-Studio-macOS-v${VERSION}.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: FullSpectrum-Studio-macOS
@@ -70,13 +75,22 @@ jobs:
       - name: Create portable ZIP
         shell: pwsh
         run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', '' -replace '-community-preview$', ''
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            $version = "dev-$($env:GITHUB_SHA.Substring(0, 7))"
+          }
           New-Item -ItemType Directory -Force release
-          Compress-Archive -Path dist/FullSpectrumStudio/* -DestinationPath release/FullSpectrum-Studio-Windows-Portable-v0.4.3.zip -Force
+          Compress-Archive -Path dist/FullSpectrumStudio/* -DestinationPath "release/FullSpectrum-Studio-Windows-Portable-v$version.zip" -Force
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Build installer
         shell: pwsh
-        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging/windows/FullSpectrumStudio.iss'
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', '' -replace '-community-preview$', ''
+          if ($env:GITHUB_REF_TYPE -ne 'tag') {
+            $version = "dev-$($env:GITHUB_SHA.Substring(0, 7))"
+          }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" packaging/windows/FullSpectrumStudio.iss
       - uses: actions/upload-artifact@v4
         with:
           name: FullSpectrum-Studio-Windows
@@ -97,11 +111,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${VERSION%-community-preview}"
+          NOTES_FILE="docs/RELEASE_NOTES_${VERSION}.md"
+          if [[ ! -f "$NOTES_FILE" ]]; then
+            NOTES_FILE="docs/RELEASE_NOTES_0.4.3.md"
+          fi
+          TITLE="FullSpectrum Studio v${VERSION} Community Preview"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" \
+              --prerelease \
+              --title "$TITLE" \
+              --notes-file "$NOTES_FILE"
             gh release upload "$GITHUB_REF_NAME" release/* --clobber
           else
             gh release create "$GITHUB_REF_NAME" release/* \
               --prerelease \
-              --title "FullSpectrum Studio v0.4.3 Community Preview" \
-              --notes-file docs/RELEASE_NOTES_0.4.3.md
+              --title "$TITLE" \
+              --notes-file "$NOTES_FILE"
           fi
