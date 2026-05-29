@@ -10,10 +10,10 @@ The source project is never modified.
 This is an independent community preview built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest public package: [v0.4.6 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.6-community-preview).
-The v0.4.6 package refresh keeps the v0.4.3 color-correctness fix, rebuilds
-the Windows downloads with the repaired packaging workflow, and stamps the
-macOS app bundle version from the release tag.
+Latest public package: [v0.4.7 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.7-community-preview).
+The v0.4.7 package fixes the CMYKW quality-100 palette path so useful CMYK
+mixes are kept instead of collapsing warm painted regions to white, while
+retaining the repaired Windows and macOS release packaging.
 
 ## What It Does
 
@@ -229,6 +229,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [0.4.1 Reliability Notes](docs/RELEASE_NOTES_0.4.1.md)
 - [0.4.2 Button Fix Notes](docs/RELEASE_NOTES_0.4.2.md)
 - [0.4.3 Color Synchronization Notes](docs/RELEASE_NOTES_0.4.3.md)
+- [0.4.7 CMYKW Quality Notes](docs/RELEASE_NOTES_0.4.7.md)
 - [OrcaSlicer Handoff](docs/ORCASLICER_HANDOFF.md)
 - [Bambu Forum Update Draft](docs/BAMBU_FORUM_POST_v0.4.3.md)
 

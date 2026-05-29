@@ -380,14 +380,42 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(len(palette[0]),3)
         self.assertEqual(palette[4][1],palette[4][2])
 
+    def test_quality_mix_limit_is_conservative_until_quality_is_raised(self):
+        self.assertEqual(ENGINE.quality_mix_limit(60),ENGINE.MAX_RELIABLE_MIX_DE)
+        self.assertEqual(ENGINE.quality_mix_limit(100),ENGINE.MAX_HIGH_QUALITY_MIX_DE)
+
     def test_rejects_misleading_mixed_recipe_even_when_it_beats_bad_anchors(self):
         anchors=[
             {"name":"Black","color":"#000000"},
             {"name":"Pink","color":"#BA9594"},
         ]
-        palette=ENGINE.build_palette(["#553B6A"],anchors,{1:100},100)
+        palette=ENGINE.build_palette(["#335599"],anchors,{1:100},100)
         self.assertEqual(len(palette[0]),2)
         self.assertEqual(palette[5][0][3],"ANCHOR")
+
+    def test_quality_100_cmykw_keeps_warm_tones_from_collapsing_to_white(self):
+        old_colors=[
+            "#F7E6DE","#00AEEF","#EC008C","#F4EE2A","#000000","#FFFFFF",
+            "#F5F0E8","#DBBA8A","#B59989","#CDB7AA","#938A62","#A7A482",
+            "#95B5A7","#D19B4E","#937EA6",
+        ]
+        usage={
+            1:731053,2:13494,3:1680,4:139745,5:5820,8:1634644,9:611411,
+            10:1566760,11:13686,12:25059,13:35007,14:20104,15:17603,
+        }
+        new_colors,_,_,_,mapping,rows=ENGINE.build_palette(
+            old_colors,ENGINE.exact_cmykw_palette(),usage,100
+        )
+        total=sum(usage.values())
+        bright=sum(
+            usage.get(old_slot,0)
+            for old_slot,new_slot in mapping.items()
+            if ENGINE.luminance(new_colors[new_slot-1])>210
+        )
+        self.assertLess(bright/total,0.35)
+        for old_slot in (8,9,10):
+            self.assertEqual(rows[old_slot-1][3],"MIX")
+            self.assertNotEqual(new_colors[mapping[old_slot]-1],"#F5F0E8")
 
     def test_official_names_keep_multiword_family_and_known_catalog_color(self):
         self.assertEqual(ENGINE.filament_family("PLA Matte Desert Tan"),"PLA Matte")

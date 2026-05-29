@@ -33,7 +33,7 @@ jobs:
             VERSION="dev-${GITHUB_SHA::7}"
           fi
           mkdir -p release
-          ditto -c -k --sequesterRsrc --keepParent "dist/FullSpectrum Studio.app" "release/FullSpectrum-Studio-macOS-v${VERSION}.zip"
+          ditto -c -k --norsrc --keepParent "dist/FullSpectrum Studio.app" "release/FullSpectrum-Studio-macOS-v${VERSION}.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: FullSpectrum-Studio-macOS

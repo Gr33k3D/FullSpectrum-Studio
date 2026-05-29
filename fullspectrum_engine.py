@@ -81,6 +81,7 @@ MIN_ANCHOR_DE = 7.0
 DIRECT_ANCHOR_DE = 4.5
 MIN_MIX_GAIN = 1.0
 MAX_RELIABLE_MIX_DE = 8.0
+MAX_HIGH_QUALITY_MIX_DE = 14.0
 CMYKW_ROLE_WARNING_DE = 10.0
 MAX_BAMBU_PAINT_SLOT = 32
 PREVIEW_GRID_RESOLUTION = 72
@@ -92,7 +93,7 @@ MAX_REFERENCE_BYTES = 600 * 1024 * 1024
 MAX_IMPORT_FACES = 2_000_000
 MAX_INTERACTIVE_PREVIEW_TRIANGLES = 750_000
 OPTIMIZED_PREVIEW_GRID_RESOLUTION = 72
-OUTPUT_VERSION = "v0.4.3"
+OUTPUT_VERSION = "v0.4.7"
 DEFAULT_QUALITY_BIAS = 60
 MIX_MODELS = ("bambu",)
 HEX_DIGITS = "0123456789ABCDEF"
@@ -114,6 +115,13 @@ if os.name == "nt" and os.environ.get("APPDATA"):
         ("Bambu Studio Beta", Path(os.environ["APPDATA"])/"BambuStudioBeta"/"filament_inventory"/"spools.json"),
         ("Bambu Studio", Path(os.environ["APPDATA"])/"BambuStudio"/"filament_inventory"/"spools.json"),
     ]
+
+def quality_mix_limit(quality_bias):
+    quality_bias=max(0,min(100,int(quality_bias)))
+    if quality_bias <= DEFAULT_QUALITY_BIAS:
+        return MAX_RELIABLE_MIX_DE
+    span=100-DEFAULT_QUALITY_BIAS
+    return MAX_RELIABLE_MIX_DE + (MAX_HIGH_QUALITY_MIX_DE-MAX_RELIABLE_MIX_DE) * ((quality_bias-DEFAULT_QUALITY_BIAS)/span)
 
 def hx(c):
     c=str(c).strip()
@@ -1371,6 +1379,7 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
                    custom_catalog_path=None, reference=None, mix_model="bambu",
                    quality_bias=DEFAULT_QUALITY_BIAS):
     requested=None if str(real_slots)=="auto" else int(real_slots)
+    mix_limit=quality_mix_limit(quality_bias)
     minimum=4 if mode=="cmykw" else MIN_REAL_SLOTS
     if requested is not None and (requested<minimum or requested>MAX_REAL_SLOTS):
         raise RuntimeError(f"{mode.upper()} strategy requires {minimum}-{MAX_REAL_SLOTS} physical slots")
@@ -1403,7 +1412,7 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
             pair=direct
             for i,j in combinations(range(len(ah)),2):
                 candidate=dist(c,mix([ah[i],ah[j]],[.5,.5],mix_model))
-                if candidate<=MAX_RELIABLE_MIX_DE:
+                if candidate<=mix_limit:
                     pair=min(pair,candidate)
             s+=(w/target_total)*pair
         lums=[luminance(a) for a in ah]
@@ -1461,7 +1470,7 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
         for _,color,weight in used:
             direct=nearest_anchor_error(color,anchors)[0]
             mix_error=best_mix_recipe(color,anchors,mix_model,quality_bias>=70)[3]
-            printable_error=mix_error if mix_error<=MAX_RELIABLE_MIX_DE else direct
+            printable_error=mix_error if mix_error<=mix_limit else direct
             weighted+=(weight/total)*min(direct,printable_error)
         # A new physical slot must buy noticeable visual improvement.
         physical_penalty=(count-minimum)*(1.35-(max(0,min(100,quality_bias))/100)*0.9)
@@ -1476,6 +1485,7 @@ def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_
     rows_by_slot={}
     next_slot=real_count+1
     quality_bias=max(0,min(100,int(quality_bias)))
+    mix_limit=quality_mix_limit(quality_bias)
     min_gain=MIN_MIX_GAIN+(100-quality_bias)*0.045
     max_unique_mixes=max(2,min(MAX_BAMBU_PAINT_SLOT-real_count,3+round(quality_bias/6)))
     mix_candidates=[]
@@ -1487,7 +1497,7 @@ def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_
         old_slot_to_new_slot[old_slot]=direct_slot
         rows_by_slot[old_slot]=[old_slot,direct_slot,target,"ANCHOR",direct_name,"","",
                                 direct_hex,f"{direct_err:.2f}",f"{direct_err:.2f}","0.00"]
-        if direct_err>DIRECT_ANCHOR_DE and gain>=min_gain and mix_err<=MAX_RELIABLE_MIX_DE:
+        if direct_err>DIRECT_ANCHOR_DE and gain>=min_gain and mix_err<=mix_limit:
             mix_candidates.append((gain*weight,gain,old_slot,target,cs,rs,preview,mix_err,direct_err))
     recipes={}
     for _,gain,old_slot,target,cs,rs,preview,mix_err,direct_err in sorted(mix_candidates,reverse=True):
@@ -2090,14 +2100,15 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         pspath.write_text(json.dumps(obj,indent=2,ensure_ascii=True))
         quality=quality_metrics(rows,usage,old,reference_result,mix_model)
         printability=printability_metrics(rows,usage,real_count,newn,layouts,obj)
+        mix_limit=quality_mix_limit(quality_bias)
         unmatched=[
             row for row in rows
-            if usage.get(row[0],0)>0 and float(row[8])>MAX_RELIABLE_MIX_DE
+            if usage.get(row[0],0)>0 and float(row[8])>mix_limit
         ]
         if unmatched:
             warnings.append(
                 f"{len(unmatched)} painted colors have no reliable match within Delta E "
-                f"{MAX_RELIABLE_MIX_DE:.0f}; nearest physical colors were kept instead "
+                f"{mix_limit:.0f} at quality {quality_bias}; nearest physical colors were kept instead "
                 "of creating misleading mixed recipes. Add closer filament colors for these regions."
             )
         recommendation=additional_anchor_recommendation(
