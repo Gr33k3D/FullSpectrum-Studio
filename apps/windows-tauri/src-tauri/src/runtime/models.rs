@@ -124,6 +124,7 @@ pub struct RendererState {
 #[serde(rename_all = "kebab-case")]
 pub enum RendererBackend {
     WebPlaceholder,
+    WebThree,
     NativeBridge,
     WgpuFuture,
 }

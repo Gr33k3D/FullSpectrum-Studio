@@ -1,4 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { ThreeModelViewer } from "./ThreeModelViewer";
 import type { RendererCapabilities, RendererStatus } from "../renderer/types";
 import type { AppSettings, ConversionResult, PreviewMode, ProjectInspection, ViewerPerformance } from "../types/core";
 import type { GpuInfo } from "../types/runtime";
@@ -9,6 +10,8 @@ type RendererPreviewProps = {
   gpuInfo: GpuInfo | null;
   inspection: ProjectInspection | null;
   conversionResult: ConversionResult | null;
+  sourcePath: string | null;
+  referencePath: string | null;
   settings: AppSettings;
   onSettingsChange: (settings: AppSettings) => void;
 };
@@ -35,12 +38,15 @@ export function RendererPreview({
   gpuInfo,
   inspection,
   conversionResult,
+  sourcePath,
+  referencePath,
   settings,
   onSettingsChange
 }: RendererPreviewProps) {
   const thumbnail = inspection?.thumbnail ? convertFileSrc(inspection.thumbnail) : null;
   const metrics = inspection?.metrics;
   const sourceColorCount = inspection?.sourceColors.length ?? 0;
+  const orbitModelPath = supportedOrbitPath(referencePath) ?? supportedOrbitPath(sourcePath);
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     onSettingsChange({ ...settings, [key]: value });
   };
@@ -83,18 +89,14 @@ export function RendererPreview({
         </label>
       </div>
 
-      <div className={thumbnail ? "preview-stage has-image" : "preview-stage"}>
-        {thumbnail ? (
-          <img alt={`${inspection?.filename ?? "Source"} plate preview`} className="plate-preview-image" src={thumbnail} />
-        ) : (
-          <div className="preview-cube" aria-hidden="true" />
-        )}
+      <div className="preview-stage has-viewer">
+        <ThreeModelViewer fallbackImage={thumbnail} modeLabel={previewModeTitle(settings.previewMode)} modelPath={orbitModelPath} />
         <div className="preview-copy">
           <h3>{previewModeTitle(settings.previewMode)}</h3>
           <p>
-            The Windows app now drives the same FullSpectrum engine as the macOS app. The heavy orbitable renderer is still
-            being migrated, so this panel shows the source plate thumbnail and validated color/runtime metadata without
-            pretending the native GPU viewer is finished.
+            The Windows app now drives the same FullSpectrum engine as the macOS app. GLB and OBJ references open in this
+            orbit viewer with a 256 mm build plate for scale; painted 3MF projects still use the source plate thumbnail
+            while the native 3MF preview contract is migrated.
           </p>
           {inspection?.previewNotice ? <p className="warning-text">{inspection.previewNotice}</p> : null}
         </div>
@@ -137,6 +139,14 @@ export function RendererPreview({
       </div>
     </section>
   );
+}
+
+function supportedOrbitPath(path: string | null) {
+  if (!path) {
+    return null;
+  }
+  const extension = path.split(".").pop()?.toLowerCase();
+  return extension && ["glb", "gltf", "obj"].includes(extension) ? path : null;
 }
 
 function previewModeTitle(mode: PreviewMode) {

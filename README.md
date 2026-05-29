@@ -167,10 +167,12 @@ The macOS orbitable analysis viewer is not present in the Windows UI.
 A Tauri v2 Windows desktop app now lives in
 [apps/windows-tauri](apps/windows-tauri). It has a React/TypeScript UI, Rust
 runtime commands, installer configuration, native file pickers, source
-inspection, output-folder selection, reference selection and a real conversion
-bridge into the FullSpectrum engine. The native GPU/orbitable 3D renderer is
-still a migration target, so the Tauri preview uses source thumbnails and
-validated metadata until the shared renderer layer is ready. See
+inspection, output-folder selection, reference selection, a Three.js GLB/OBJ
+orbit viewer with a 256 mm build plate reference, and a real conversion bridge
+into the FullSpectrum engine. Native 3MF preview meshes, heatmaps and anchor
+influence overlays are still migration targets, so painted 3MF projects use
+source thumbnails and validated metadata until the shared renderer layer is
+ready. See
 [docs/WINDOWS_TAURI_MIGRATION.md](docs/WINDOWS_TAURI_MIGRATION.md) and
 [docs/MIGRATION_MAP.md](docs/MIGRATION_MAP.md).
 

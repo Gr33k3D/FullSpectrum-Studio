@@ -57,6 +57,8 @@ export function MainLayout(props: MainLayoutProps) {
             gpuInfo={props.gpuInfo}
             inspection={props.inspection}
             conversionResult={props.conversionResult}
+            sourcePath={props.sourcePath}
+            referencePath={props.referencePath}
             settings={props.settings}
             onSettingsChange={props.onSettingsChange}
           />

@@ -2,16 +2,16 @@ import type { RendererBridge, RendererCapabilities, RendererStatus } from "./typ
 
 export class WebRendererPlaceholder implements RendererBridge {
   readonly capabilities: RendererCapabilities = {
-    backend: "web-placeholder",
-    supports3D: false,
-    supportsTexturePreview: false,
+    backend: "web-three",
+    supports3D: true,
+    supportsTexturePreview: true,
     supportsHeatmap: false,
     supportsAnchorInfluence: false,
     supportsNativeGpu: false,
-    maxRecommendedTriangles: null,
+    maxRecommendedTriangles: 250_000,
     notes: [
-      "This is a layout-safe preview placeholder.",
-      "The next renderer phase should consume shared inspection/preview assets from the engine."
+      "Three.js viewer loads GLB/OBJ references with an orbit camera and build plate.",
+      "Heatmap and anchor influence still depend on the future shared preview asset contract."
     ]
   };
 
@@ -26,7 +26,7 @@ export class WebRendererPlaceholder implements RendererBridge {
   }
 
   async loadProject(_path: string): Promise<void> {
-    this.status = "rendering-placeholder";
+    this.status = "loading-project";
     await new Promise((resolve) => window.setTimeout(resolve, 120));
     this.status = "ready";
   }

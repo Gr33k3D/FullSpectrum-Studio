@@ -130,15 +130,15 @@ export function PaletteEnginePanel({
       <div className="path-grid">
         <div>
           <strong>Source</strong>
-          <span>{sourcePath ?? "Choose a painted .3mf, .obj or .glb"}</span>
+          <span>{sourcePath ? displayPath(sourcePath) : "Choose a painted .3mf, .obj or .glb"}</span>
         </div>
         <div>
           <strong>Reference</strong>
-          <span>{referencePath ?? "Optional visual target"}</span>
+          <span>{referencePath ? displayPath(referencePath) : "Optional visual target"}</span>
         </div>
         <div>
           <strong>Output folder</strong>
-          <span>{outputDir ?? "Source folder or engine default"}</span>
+          <span>{outputDir ? displayPath(outputDir) : "Source folder or engine default"}</span>
         </div>
       </div>
 
@@ -177,7 +177,7 @@ export function PaletteEnginePanel({
           </div>
           <div className="wide">
             <strong>Output</strong>
-            <span>{result.output ?? "No output path returned"}</span>
+            <span>{result.output ? displayPath(result.output) : "No output path returned"}</span>
           </div>
           {result.recommendation?.summary ? (
             <div className="wide">
@@ -189,4 +189,10 @@ export function PaletteEnginePanel({
       ) : null}
     </section>
   );
+}
+
+function displayPath(path: string) {
+  const cleaned = path.replace(/\\/g, "/");
+  const parts = cleaned.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : path;
 }

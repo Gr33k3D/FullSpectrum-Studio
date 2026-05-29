@@ -16,6 +16,14 @@ export default defineConfig({
   build: {
     target: "es2020",
     minify: "esbuild",
-    sourcemap: true
+    sourcemap: true,
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          three: ["three"]
+        }
+      }
+    }
   }
 });

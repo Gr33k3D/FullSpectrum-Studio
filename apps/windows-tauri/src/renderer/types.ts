@@ -1,4 +1,4 @@
-export type RendererBackend = "web-placeholder" | "native-bridge" | "wgpu-future";
+export type RendererBackend = "web-placeholder" | "web-three" | "native-bridge" | "wgpu-future";
 
 export type RendererStatus =
   | "idle"

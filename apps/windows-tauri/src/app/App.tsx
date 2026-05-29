@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { MainLayout } from "../layout/MainLayout";
 import { WebRendererPlaceholder } from "../renderer/WebRendererPlaceholder";
 import type { RendererStatus } from "../renderer/types";
+import { getBrowserDemoState } from "./demoState";
 import {
   getAppVersion,
   getGpuInfoPlaceholder,
@@ -59,6 +60,23 @@ export function App() {
 
   async function initialize() {
     try {
+      const demo = getBrowserDemoState();
+      if (demo) {
+        await renderer.initialize();
+        setVersion(demo.version);
+        setRuntime(demo.runtime);
+        setRuntimeStatus(demo.runtimeStatus);
+        setGpuInfo(demo.gpuInfo);
+        setInspection(demo.inspection);
+        setSourcePath(demo.sourcePath);
+        setReferencePath(demo.referencePath);
+        setOutputDir(demo.outputDir);
+        setConversionResult(demo.conversionResult);
+        setRendererStatus(renderer.getStatus());
+        setStatus(demo.status);
+        return;
+      }
+
       const [appVersion, paths, gpu] = await Promise.all([
         getAppVersion(),
         getRuntimePaths(),
