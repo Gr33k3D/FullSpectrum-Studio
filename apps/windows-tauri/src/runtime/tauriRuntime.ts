@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { ProjectInspection, ProjectMetadata } from "../types/core";
+import type { ConversionRequest, ConversionResult, ProjectInspection, ProjectMetadata } from "../types/core";
 import type { GpuInfo, LogEntry, LogLevel, LogWriteResult, RuntimePathsResponse } from "../types/runtime";
 
 export type ProjectDirectorySelection = {
@@ -52,9 +52,41 @@ export async function selectSourceFile(): Promise<ProjectInspection | null> {
   return inspectProject(selected);
 }
 
+export async function selectReferenceFile(): Promise<string | null> {
+  const selected = await open({
+    directory: false,
+    multiple: false,
+    title: "Open Optional Visual Reference",
+    filters: [
+      {
+        name: "Reference assets",
+        extensions: ["obj", "glb", "png", "jpg", "jpeg"]
+      }
+    ]
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
+export async function selectOutputDirectory(): Promise<string | null> {
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: "Choose FullSpectrum Output Folder"
+  });
+  return typeof selected === "string" ? selected : null;
+}
+
 export async function inspectProject(path: string): Promise<ProjectInspection> {
   const metadataOnly = path.toLowerCase().endsWith(".3mf");
   return invoke<ProjectInspection>("inspect_project", { path, metadataOnly });
+}
+
+export async function convertProject(request: ConversionRequest): Promise<ConversionResult> {
+  return invoke<ConversionResult>("convert_project", { request });
+}
+
+export async function revealPath(path: string): Promise<void> {
+  return invoke<void>("reveal_path", { path });
 }
 
 export async function writeLog(level: LogLevel, message: string): Promise<LogWriteResult> {

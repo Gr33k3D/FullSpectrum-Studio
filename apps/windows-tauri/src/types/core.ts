@@ -65,6 +65,63 @@ export type ProjectInspection = {
   import: ImportSummary | null;
 };
 
+export type ConversionRequest = {
+  inputPath: string;
+  outputDir: string | null;
+  referencePath: string | null;
+  paletteMode: PaletteMode;
+  paletteSource: PaletteSource;
+  realSlots: RealSlotSelection;
+  qualityBias: number;
+  autoOpenValidatedOutput: boolean;
+};
+
+export type ConversionResult = {
+  input?: string;
+  output?: string;
+  csv?: string;
+  report?: string;
+  colorValidationReport?: string;
+  mode?: PaletteMode;
+  paletteSource?: PaletteSource;
+  sourceSlots?: number;
+  realSlots?: number;
+  outputSlots?: number;
+  mixedSlots?: number;
+  validation?: string;
+  paintedSlots?: number[];
+  quality?: {
+    qualityScore?: number;
+    confidenceScore?: number;
+    confidenceLabel?: string;
+    estimatedDeltaE?: number;
+    maximumDeltaE?: number;
+    meanDeltaE?: number;
+    contrastRetention?: number;
+    referenceSimilarityScore?: number;
+    brightnessError?: number;
+  };
+  preservation?: {
+    geometryPreserved?: boolean;
+    textureResourcesPreserved?: boolean;
+    paintRemapVerified?: boolean;
+  };
+  colorValidation?: {
+    verified?: boolean;
+    maximumDeltaE?: number;
+  };
+  recommendation?: {
+    summary?: string;
+    suggestions?: string[];
+  };
+  printability?: {
+    complexity?: string;
+    sliceRequiredForTimeAndUsage?: boolean;
+  };
+  warnings?: string[];
+  [key: string]: unknown;
+};
+
 export type PreviewMode =
   | "plateImage"
   | "original"

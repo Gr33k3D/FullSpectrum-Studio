@@ -12,8 +12,11 @@ until the new runtime and renderer layers are migrated.
 - Rust backend bridge with structured commands.
 - Windows runtime directory preparation.
 - Native folder picker through the Tauri dialog plugin.
+- Native source/reference/output pickers.
+- FullSpectrum engine inspection and conversion commands.
 - Basic project/workspace metadata scanning in Rust.
 - Runtime log writes and recent-log reads through Rust commands.
+- Output reveal/open-folder command.
 - Renderer abstraction placeholders in TypeScript.
 - GPU/runtime placeholder module in Rust with a future `wgpu-runtime` feature.
 - MSI-oriented Tauri bundle configuration.
@@ -60,11 +63,13 @@ apps/windows-tauri/src-tauri/target/release/*.exe
 
 ## Current Limitations
 
-- The renderer is a placeholder. It does not claim real 3D preview, heatmaps or
-  anchor influence yet.
-- The Rust backend currently prepares runtime paths, opens project folders,
-  writes/reads logs and returns basic file/folder metadata. It does not run the
-  Python conversion engine yet.
+- The renderer is not the macOS SceneKit viewer yet. The Tauri app displays the
+  available source plate thumbnail, source colors and validation metadata, but
+  real orbitable 3D, heatmaps and anchor influence still need the shared
+  renderer layer.
+- The Rust backend now launches the existing Python engine for inspection and
+  conversion. This keeps behavior aligned with the stable engine while the core
+  is extracted.
 - Project folder scanning is intentionally shallow and bounded. It reports file
   counts, supported asset counts and a small asset list, but does not parse
   Bambu `Metadata/project_settings.config` yet.

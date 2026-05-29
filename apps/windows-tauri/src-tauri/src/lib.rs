@@ -10,6 +10,8 @@ pub fn run() {
             commands::select_project_directory,
             commands::load_project_metadata,
             commands::inspect_project,
+            commands::convert_project,
+            commands::reveal_path,
             commands::write_log,
             commands::read_recent_logs,
             commands::get_gpu_info_placeholder

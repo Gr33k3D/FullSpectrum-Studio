@@ -9,7 +9,7 @@ export function StatusBar({ status, runtimeReady }: StatusBarProps) {
       <span className={runtimeReady ? "dot ready" : "dot"} />
       <span>{status}</span>
       <span className="status-spacer" />
-      <span>Windows desktop shell · Tauri v2 · renderer bridge placeholder</span>
+      <span>Windows desktop app · Tauri v2 · FullSpectrum engine bridge</span>
     </footer>
   );
 }

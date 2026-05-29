@@ -1,8 +1,8 @@
 use super::models::{AssetKind, AssetMetadata, ProjectKind, ProjectMetadata};
 use std::{fs, io, path::Path, time::UNIX_EPOCH};
 
-const MAX_SCANNED_FILES: usize = 10_000;
-const MAX_RETURNED_ASSETS: usize = 80;
+const MAX_SCANNED_FILES: usize = 2_000;
+const MAX_RETURNED_ASSETS: usize = 64;
 
 pub fn metadata_for_path(path: Option<&str>) -> io::Result<ProjectMetadata> {
     let Some(path) = path else {
@@ -144,7 +144,9 @@ fn scan_directory(root: &Path) -> io::Result<DirectoryScan> {
             let path = entry.path();
             let metadata = entry.metadata()?;
             if metadata.is_dir() {
-                stack.push(path);
+                if !is_ignored_directory(&path) {
+                    stack.push(path);
+                }
                 continue;
             }
             if !metadata.is_file() {
@@ -184,6 +186,27 @@ fn scan_directory(root: &Path) -> io::Result<DirectoryScan> {
         assets,
         truncated,
     })
+}
+
+fn is_ignored_directory(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(|name| {
+            matches!(
+                name,
+                ".git"
+                    | ".hg"
+                    | ".svn"
+                    | ".DS_Store"
+                    | "node_modules"
+                    | "target"
+                    | "dist"
+                    | "build"
+                    | ".build"
+                    | "__pycache__"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn asset_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<AssetMetadata> {

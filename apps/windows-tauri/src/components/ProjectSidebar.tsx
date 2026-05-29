@@ -16,6 +16,7 @@ export function ProjectSidebar({ runtime, runtimeStatus, settings, metadata, ins
       <nav className="panel navigation-panel" aria-label="Workspace navigation">
         <h2>Workspace</h2>
         <a className="nav-item active" href="#renderer">Renderer</a>
+        <a className="nav-item" href="#palette-engine">Palette Engine</a>
         <a className="nav-item" href="#assets">Assets</a>
         <a className="nav-item" href="#runtime">Runtime</a>
         <a className="nav-item" href="#logs">Logs</a>
@@ -56,7 +57,7 @@ export function ProjectSidebar({ runtime, runtimeStatus, settings, metadata, ins
             <dt>Colors</dt>
             <dd>{inspection.sourceColors.length}</dd>
             <dt>Preview</dt>
-            <dd>{inspection.previewMesh ? "Mesh ready" : "Not built"}</dd>
+            <dd>{inspection.thumbnail ? "Plate image loaded" : inspection.previewMesh ? "Mesh ready" : "Metadata loaded"}</dd>
           </dl>
         ) : (
           <p className="muted">Open a source file to inspect the real engine metadata.</p>
@@ -100,7 +101,7 @@ export function ProjectSidebar({ runtime, runtimeStatus, settings, metadata, ins
       <section className="panel">
         <h2>Selected Folder</h2>
         <p className="path-value">{selectedDirectory ?? "No folder selected."}</p>
-        <p className="muted">Native folder selection is handled by the Tauri dialog plugin and scanned by Rust.</p>
+        <p className="muted">Open Folder is for workspace browsing. Open Source is the converter entry point.</p>
       </section>
 
       <section className="panel">

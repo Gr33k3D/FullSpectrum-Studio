@@ -70,6 +70,19 @@ pub struct ProjectInspection {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConversionRequest {
+    pub input_path: String,
+    pub output_dir: Option<String>,
+    pub reference_path: Option<String>,
+    pub palette_mode: PaletteMode,
+    pub palette_source: PaletteSource,
+    pub real_slots: RealSlotSelection,
+    pub quality_bias: u8,
+    pub auto_open_validated_output: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MeshMetrics {
     pub object_count: Option<usize>,
     pub vertex_count: Option<usize>,

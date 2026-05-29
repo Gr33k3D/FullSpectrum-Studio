@@ -17,7 +17,7 @@ export function AssetPanel({ metadata, inspection, gpuInfo }: AssetPanelProps) {
       <div className="asset-grid">
         <div>
           <strong>Input support</strong>
-          <span>.3mf, .obj, .glb placeholders</span>
+          <span>.3mf conversion, experimental .obj/.glb import</span>
         </div>
         <div>
           <strong>Current metadata</strong>
@@ -33,7 +33,7 @@ export function AssetPanel({ metadata, inspection, gpuInfo }: AssetPanelProps) {
         </div>
         <div>
           <strong>Runtime bridge</strong>
-          <span>{inspection ? "Python engine inspect active" : "Tauri commands active"}</span>
+          <span>{inspection ? "FullSpectrum engine active" : "Tauri commands ready"}</span>
         </div>
       </div>
       {inspection?.sourceColors.length ? (
