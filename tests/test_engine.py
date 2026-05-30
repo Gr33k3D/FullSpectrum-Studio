@@ -440,6 +440,53 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(ENGINE.quality_mix_limit(60),ENGINE.MAX_RELIABLE_MIX_DE)
         self.assertEqual(ENGINE.quality_mix_limit(100),ENGINE.MAX_HIGH_QUALITY_MIX_DE)
 
+    def test_smart_quality_bias_runs_multiple_plans_and_reports_selected_value(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            write_project(source)
+            output = ENGINE.convert(
+                source,
+                "official",
+                "catalog",
+                folder,
+                False,
+                "auto",
+                quality_bias="auto",
+            )
+            self.assertEqual(output["qualityBiasMode"], "auto")
+            self.assertIn(output["qualityBias"], ENGINE.SMART_QUALITY_CANDIDATES)
+            self.assertEqual(output["quality"]["resolvedQualityBias"], output["qualityBias"])
+            self.assertGreaterEqual(len(output["quality"].get("smartCandidates", [])), 2)
+            self.assertIn("Smart auto selected", Path(output["report"]).read_text())
+
+    def test_anchor_selection_keeps_mix_parent_colors_when_they_improve_output(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            palette = folder / "palette.json"
+            palette.write_text(json.dumps([
+                {"name": "Yellow", "color": "#F4EE2A"},
+                {"name": "Ash Gray", "color": "#9B9B9B"},
+                {"name": "Copper", "color": "#B87333"},
+                {"name": "Dark Chocolate", "color": "#4D3324"},
+                {"name": "White", "color": "#FFFFFF"},
+                {"name": "Black", "color": "#000000"},
+            ]))
+            old_colors = ["#F4EE2A", "#AE835B", "#4D3324", "#A6A9AA"]
+            usage = {1: 200, 2: 1400, 3: 900, 4: 500}
+            anchors = ENGINE.select_anchors(
+                old_colors,
+                usage,
+                "official",
+                {"spools": []},
+                "custom",
+                "4",
+                custom_catalog_path=palette,
+                quality_bias=60,
+            )
+            colors = {anchor["color"] for anchor in anchors}
+            self.assertIn("#B87333", colors)
+            self.assertIn("#9B9B9B", colors)
+
     def test_rejects_misleading_mixed_recipe_even_when_it_beats_bad_anchors(self):
         anchors=[
             {"name":"Black","color":"#000000"},

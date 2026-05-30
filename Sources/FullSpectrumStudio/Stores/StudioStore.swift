@@ -40,6 +40,7 @@ final class StudioStore: ObservableObject {
     @Published var progress = 0.0
     @Published var progressMessage = "Waiting for a model."
     @Published var errorReport: StudioErrorReport?
+    @AppStorage("smartQuality") var smartQuality = true
     @AppStorage("autoOpenValidatedOutput") var autoOpenValidatedOutput = true
     @AppStorage("outputApplication") private var outputApplicationRawValue = OutputApplication.bambuStudio.rawValue
     @AppStorage("restoreLastSession") var restoreLastSession = false
@@ -374,6 +375,8 @@ final class StudioStore: ObservableObject {
         let capturedPalette = customPaletteURL
         let capturedTexture = textureOverrideURL
         let capturedPrediction = mixPrediction
+        let capturedSmartQuality = smartQuality
+        let capturedQualityBias = Int(qualityBias)
         startActivityMonitor(label: "Conversion")
         conversionTask = Task {
             let temporaryAccess = beginTemporaryAccess(to: [capturedReference, capturedPalette, capturedTexture])
@@ -387,7 +390,7 @@ final class StudioStore: ObservableObject {
                     reference: capturedReference,
                     customPalette: capturedPalette,
                     textureOverride: capturedTexture,
-                    qualityBias: Int(qualityBias),
+                    qualityBias: capturedSmartQuality ? "auto" : String(capturedQualityBias),
                     mixPrediction: capturedPrediction,
                     outputDirectory: file.deletingLastPathComponent(),
                     progress: { [weak self] value, message in
@@ -405,7 +408,10 @@ final class StudioStore: ObservableObject {
                 anchorInfluenceMeshURL = converted.analysisAssets?.anchorInfluenceMesh.map(URL.init(fileURLWithPath:))
                 progress = 1
                 progressMessage = "Validated output is ready."
-                status = "Validated: \(converted.realSlots) physical and \(converted.outputSlots - converted.realSlots) mixed slots."
+                let qualitySuffix = converted.quality.qualityBiasMode == "auto"
+                    ? converted.quality.resolvedQualityBias.map { " Smart quality \($0)/100." } ?? ""
+                    : ""
+                status = "Validated: \(converted.realSlots) physical and \(converted.outputSlots - converted.realSlots) mixed slots.\(qualitySuffix)"
                 if outputPreviewMeshURL == nil {
                     buildOutputPreview(for: converted.output, conversionID: currentConversionID, mixPrediction: capturedPrediction)
                 }

@@ -96,6 +96,9 @@ MAX_INTERACTIVE_PREVIEW_TRIANGLES = 750_000
 OPTIMIZED_PREVIEW_GRID_RESOLUTION = 72
 OUTPUT_VERSION = "v0.4.8"
 DEFAULT_QUALITY_BIAS = 60
+SMART_QUALITY_CANDIDATES = (35, 60, 80, 100)
+ANCHOR_BEAM_WIDTH = 8
+ANCHOR_POOL_LIMIT = 64
 MIX_MODELS = ("bambu",)
 HEX_DIGITS = "0123456789ABCDEF"
 PAINT_PATTERN = re.compile(r'paint_color="([^"]+)"')
@@ -118,8 +121,17 @@ if os.name == "nt" and os.environ.get("APPDATA"):
         ("Bambu Studio", Path(os.environ["APPDATA"])/"BambuStudio"/"filament_inventory"/"spools.json"),
     ]
 
+def is_auto_quality_bias(value):
+    return str(value).strip().lower() in ("auto","smart")
+
+def clamp_quality_bias(value):
+    try:
+        return max(0,min(100,int(value)))
+    except (TypeError,ValueError):
+        raise RuntimeError("Quality versus waste must be 0-100, or auto for smart planning.")
+
 def quality_mix_limit(quality_bias):
-    quality_bias=max(0,min(100,int(quality_bias)))
+    quality_bias=clamp_quality_bias(quality_bias)
     if quality_bias <= DEFAULT_QUALITY_BIAS:
         return MAX_RELIABLE_MIX_DE
     span=100-DEFAULT_QUALITY_BIAS
@@ -1396,6 +1408,106 @@ def select_cmykw_anchors(pool, count):
         remaining=[candidate for candidate in remaining if candidate["color"] != match["color"]]
     return selected
 
+def weighted_color_targets(old_colors, usage, reference=None, quality_bias=DEFAULT_QUALITY_BIAS):
+    usage=usage or {}
+    used=[(i+1,c,float(usage.get(i+1,0))) for i,c in enumerate(old_colors) if usage.get(i+1,0)>0]
+    if not used:
+        used=[(i+1,c,1.0) for i,c in enumerate(old_colors)]
+    total=sum(w for _,_,w in used) or 1.0
+    targets=list(used)
+    if reference and reference.get("dominantColors"):
+        # A source texture can expose important colors which sparse painted
+        # facet usage understates. Keep it influential, never dominant.
+        reference_weight=total*(0.10+0.001*clamp_quality_bias(quality_bias))
+        targets.extend((0,item["color"],reference_weight*item["weight"])
+                       for item in reference["dominantColors"])
+    target_total=sum(w for _,_,w in targets) or 1.0
+    return used,total,targets,target_total
+
+def unique_palette_options(pool):
+    unique=[]
+    seen=set()
+    for item in pool:
+        color=anchor_color(item)
+        if color in seen:
+            continue
+        seen.add(color)
+        unique.append(item)
+    return unique
+
+def color_saturation(color):
+    channels=rgb(color)
+    return max(channels)-min(channels)
+
+def anchor_signature(anchors):
+    return tuple(anchor_color(anchor) for anchor in anchors)
+
+def distinct_anchor_set(anchors):
+    colors=[anchor_color(anchor) for anchor in anchors]
+    if len(colors) != len(set(colors)):
+        return False
+    return not any(dist(anchor_color(a),anchor_color(b))<MIN_ANCHOR_DE
+                   for ix,a in enumerate(anchors) for b in anchors[ix+1:])
+
+def shortlist_anchor_pool(pool, targets, target_total, limit=ANCHOR_POOL_LIMIT):
+    pool=unique_palette_options(pool)
+    if len(pool) <= limit:
+        return pool
+    selected=[]
+    selected_colors=set()
+    def add(candidate):
+        color=anchor_color(candidate)
+        if color not in selected_colors:
+            selected.append(candidate)
+            selected_colors.add(color)
+    significant=sorted(targets,key=lambda item:item[2],reverse=True)[:14]
+    for _,color,_ in significant:
+        for candidate in sorted(pool,key=lambda item:dist(color,anchor_color(item)))[:4]:
+            add(candidate)
+    for sorter in (
+        lambda item:luminance(anchor_color(item)),
+        lambda item:-luminance(anchor_color(item)),
+        lambda item:-color_saturation(anchor_color(item)),
+    ):
+        for candidate in sorted(pool,key=sorter)[:8]:
+            add(candidate)
+    coverage=sorted(
+        pool,
+        key=lambda item:sum((weight/target_total)*dist(color,anchor_color(item))
+                            for _,color,weight in targets),
+    )
+    for candidate in coverage:
+        add(candidate)
+        if len(selected) >= limit:
+            break
+    return selected
+
+def palette_usage_stats(rows, usage, quality_bias):
+    usage=usage or {}
+    weights={slot:float(usage.get(slot,0)) for slot,*_ in rows}
+    total=sum(weights.values()) or 1.0
+    mixed_rows=[row for row in rows if row[3]=="MIX"]
+    mixed_slots=len({row[1] for row in mixed_rows})
+    mixed_share=sum(weights.get(row[0],0.0) for row in mixed_rows)/total
+    limit=quality_mix_limit(quality_bias)
+    weak_share=sum(weights.get(row[0],0.0) for row in rows if float(row[8])>limit)/total
+    return mixed_slots,mixed_share,weak_share
+
+def palette_selection_score(old_colors, usage, anchors, quality_bias, mix_model="bambu", reference=None):
+    newc,_,_,_,_,rows=build_palette(old_colors,anchors,usage,quality_bias,mix_model)
+    metrics=quality_metrics(rows,usage,old_colors,reference,mix_model)
+    mixed_slots,mixed_share,weak_share=palette_usage_stats(rows,usage,quality_bias)
+    practical_pressure=(100-clamp_quality_bias(quality_bias))/100
+    score=(
+        metrics["estimatedDeltaE"]
+        + metrics["maximumDeltaE"]*0.035
+        + mixed_slots*(0.05+0.12*practical_pressure)
+        + mixed_share*(0.45+0.55*practical_pressure)
+        + weak_share*3.0
+        - metrics.get("contrastRetention",0)*0.003
+    )
+    return score,newc,rows,metrics,mixed_slots,mixed_share
+
 def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slots="auto",
                    custom_catalog_path=None, reference=None, mix_model="bambu",
                    quality_bias=DEFAULT_QUALITY_BIAS):
@@ -1414,18 +1526,14 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
         pool=custom_palette(custom_catalog_path)
     else:
         pool=catalog_palette("all" if palette_source=="all-bambu" else "core",inventory)
-    used=[(i+1,c,float(usage.get(i+1,0))) for i,c in enumerate(old_colors) if usage.get(i+1,0)>0]
-    if not used: used=[(i+1,c,1.0) for i,c in enumerate(old_colors)]
-    total=sum(w for _,_,w in used) or 1.0
-    targets=list(used)
-    if reference and reference.get("dominantColors"):
-        # A source texture can expose important colors which sparse painted
-        # facet usage understates. Keep it influential, never dominant.
-        reference_weight=total*(0.10+0.001*max(0,min(100,quality_bias)))
-        targets.extend((0,item["color"],reference_weight*item["weight"])
-                       for item in reference["dominantColors"])
-    target_total=sum(w for _,_,w in targets) or 1.0
+    used,total,targets,target_total=weighted_color_targets(old_colors,usage,reference,quality_bias)
+    if mode!="cmykw":
+        pool=shortlist_anchor_pool(pool,targets,target_total)
+    else:
+        pool=unique_palette_options(pool)
     def score(anchors):
+        if not anchors:
+            return 999999.0
         ah=[anchor_color(anchor) for anchor in anchors]
         s=0.0
         for _,c,w in targets:
@@ -1444,57 +1552,99 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
                 d=dist(ah[i],ah[j])
                 if d<MIN_ANCHOR_DE: s+=(MIN_ANCHOR_DE-d)*4
         return s
-    def choose_count(count):
-        if len({anchor_color(item) for item in pool})<count:
-            raise RuntimeError(f"Filament source contains fewer than {count} distinct colors")
-        if mode=="cmykw":
-            return select_cmykw_anchors(pool,count)
-        selected=[]
-        if any(luminance(c)>205 and (w/total)>.01 for _,c,w in used):
-            selected.append(min(pool,key=lambda b:abs(luminance(anchor_color(b))-245)))
-        if len(selected)<count and any(luminance(c)<75 and (w/total)>.01 for _,c,w in used):
-            dark=min(pool,key=lambda b:luminance(anchor_color(b)))
-            if dark not in selected: selected.append(dark)
+    def greedy_fill(start, count):
+        selected=list(start)
         while len(selected)<count:
             best=None
             for cand in pool:
-                if cand in selected: continue
-                if any(dist(anchor_color(cand),anchor_color(item))<MIN_ANCHOR_DE for item in selected): continue
-                candidate=(score(selected+[cand]),cand)
-                if best is None or candidate[0]<best[0]: best=candidate
+                if cand in selected:
+                    continue
+                trial=selected+[cand]
+                if not distinct_anchor_set(trial):
+                    continue
+                candidate=(score(trial),cand)
+                if best is None or candidate[0]<best[0]:
+                    best=candidate
             if best is None:
                 best=next(((0,cand) for cand in pool if cand not in selected),None)
             if best is None:
                 raise RuntimeError("Could not find enough distinct physical filament anchors")
             selected.append(best[1])
-        current=selected[:count]; current_score=score(current)
-        improved=True
-        while improved:
-            improved=False
-            for index in range(count):
+        return selected
+    def local_optimize(current):
+        current=list(current)
+        return current,palette_selection_score(old_colors,usage,current,quality_bias,mix_model,reference)[0]
+    def beam_candidates(count):
+        beams=[()]
+        for _ in range(count):
+            expanded=[]
+            for beam in beams:
+                current=list(beam)
                 for candidate in pool:
-                    if candidate in current: continue
-                    trial=current[:]; trial[index]=candidate
-                    if any(dist(anchor_color(a),anchor_color(b))<MIN_ANCHOR_DE
-                           for ix,a in enumerate(trial) for b in trial[ix+1:]):
+                    if candidate in current:
                         continue
-                    candidate_score=score(trial)
-                    if candidate_score+1e-6<current_score:
-                        current=trial; current_score=candidate_score; improved=True; break
-                if improved: break
-        return current
+                    trial=current+[candidate]
+                    if not distinct_anchor_set(trial):
+                        continue
+                    expanded.append((score(trial),tuple(trial)))
+            kept=[]
+            seen=set()
+            for _,trial in sorted(expanded,key=lambda item:item[0]):
+                key=tuple(sorted(anchor_signature(trial)))
+                if key in seen:
+                    continue
+                seen.add(key)
+                kept.append(trial)
+                if len(kept)>=ANCHOR_BEAM_WIDTH:
+                    break
+            beams=kept
+            if not beams:
+                break
+        return [list(beam) for beam in beams if len(beam)==count]
+    def choose_count(count):
+        if len({anchor_color(item) for item in pool})<count:
+            raise RuntimeError(f"Filament source contains fewer than {count} distinct colors")
+        if mode=="cmykw":
+            return select_cmykw_anchors(pool,count)
+        starts=[[]]
+        seeded=[]
+        if any(luminance(c)>205 and (w/total)>.01 for _,c,w in used):
+            seeded.append(min(pool,key=lambda b:abs(luminance(anchor_color(b))-245)))
+        if len(seeded)<count and any(luminance(c)<75 and (w/total)>.01 for _,c,w in used):
+            dark=min(pool,key=lambda b:luminance(anchor_color(b)))
+            if dark not in seeded:
+                seeded.append(dark)
+        if seeded and distinct_anchor_set(seeded):
+            starts.append(seeded[:count])
+        for _,color,_ in sorted(used,key=lambda item:item[2],reverse=True)[:min(6,len(used))]:
+            starts.append([min(pool,key=lambda candidate:dist(color,anchor_color(candidate)))])
+        starts.extend(beam_candidates(count))
+        best=None
+        seen=set()
+        for start in starts:
+            if len(start)>count or not distinct_anchor_set(start):
+                continue
+            try:
+                filled=start if len(start)==count else greedy_fill(start,count)
+                current,current_score=local_optimize(filled)
+            except RuntimeError:
+                continue
+            key=tuple(sorted(anchor_signature(current)))
+            if key in seen:
+                continue
+            seen.add(key)
+            if best is None or current_score<best[0]:
+                best=(current_score,current)
+        if best is None:
+            raise RuntimeError("Could not find enough distinct physical filament anchors")
+        return best[1]
     counts=[requested] if requested is not None else list(range(minimum,MAX_REAL_SLOTS+1))
     trials=[]
     for count in counts:
         anchors=choose_count(count)
-        weighted=0.0
-        for _,color,weight in used:
-            direct=nearest_anchor_error(color,anchors)[0]
-            mix_error=best_mix_recipe(color,anchors,mix_model,quality_bias>=70)[3]
-            printable_error=mix_error if mix_error<=mix_limit else direct
-            weighted+=(weight/total)*min(direct,printable_error)
+        weighted=palette_selection_score(old_colors,usage,anchors,quality_bias,mix_model,reference)[0]
         # A new physical slot must buy noticeable visual improvement.
-        physical_penalty=(count-minimum)*(1.35-(max(0,min(100,quality_bias))/100)*0.9)
+        physical_penalty=(count-minimum)*(1.35-(clamp_quality_bias(quality_bias)/100)*0.9)
         trials.append((weighted+physical_penalty,weighted,anchors))
     return min(trials,key=lambda trial:trial[0])[2]
 
@@ -1505,7 +1655,7 @@ def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_
     old_slot_to_new_slot={}
     rows_by_slot={}
     next_slot=real_count+1
-    quality_bias=max(0,min(100,int(quality_bias)))
+    quality_bias=clamp_quality_bias(quality_bias)
     mix_limit=quality_mix_limit(quality_bias)
     min_gain=MIN_MIX_GAIN+(100-quality_bias)*0.045
     max_unique_mixes=max(2,min(MAX_BAMBU_PAINT_SLOT-real_count,3+round(quality_bias/6)))
@@ -1683,6 +1833,68 @@ def additional_anchor_recommendation(old_colors, usage, anchors, palette_source,
         "estimatedMixedSlots":mix_count,
         "availability":"owned" if palette_source=="inventory" else "confirm before purchase",
     }
+
+def smart_quality_plan_score(metrics, rows, usage, real_count, output_count, quality_bias):
+    mixed_slots,mixed_share,weak_share=palette_usage_stats(rows,usage,quality_bias)
+    practical_pressure=(100-clamp_quality_bias(quality_bias))/100
+    return (
+        metrics["estimatedDeltaE"]*2.4
+        + metrics["maximumDeltaE"]*0.05
+        + mixed_slots*(0.16+0.18*practical_pressure)
+        + mixed_share*(1.1+0.8*practical_pressure)
+        + real_count*0.18
+        + max(0,output_count-real_count)*0.04
+        + weak_share*5.0
+        - metrics.get("contrastRetention",0)*0.004
+    )
+
+def select_smart_palette(old_colors, usage, mode, inventory, palette_source, real_slots="auto",
+                         custom_catalog_path=None, reference=None, mix_model="bambu"):
+    candidates=list(SMART_QUALITY_CANDIDATES)
+    if mode=="cmykw":
+        candidates=sorted(set(candidates+[75,90]))
+    best=None
+    summaries=[]
+    errors=[]
+    for quality_bias in candidates:
+        try:
+            anchors=select_anchors(
+                old_colors,usage,mode,inventory,palette_source,real_slots,
+                custom_catalog_path,reference,mix_model,quality_bias
+            )
+            palette=build_palette(old_colors,anchors,usage,quality_bias,mix_model)
+            rows=palette[-1]
+            metrics=quality_metrics(rows,usage,old_colors,reference,mix_model)
+            mixed_slots,mixed_share,_=palette_usage_stats(rows,usage,quality_bias)
+            output_count=len(palette[0])
+            score=smart_quality_plan_score(metrics,rows,usage,len(anchors),output_count,quality_bias)
+            summary={
+                "qualityBias":quality_bias,
+                "realSlots":len(anchors),
+                "outputSlots":output_count,
+                "mixedSlots":mixed_slots,
+                "paintedMixedShare":round(mixed_share*100,1),
+                "estimatedDeltaE":metrics["estimatedDeltaE"],
+                "qualityScore":metrics["qualityScore"],
+                "score":round(score,3),
+            }
+            summaries.append(summary)
+            if best is None or score<best["score"]:
+                best={
+                    "score":score,
+                    "qualityBias":quality_bias,
+                    "anchors":anchors,
+                    "palette":palette,
+                    "metrics":metrics,
+                    "summaries":summaries,
+                }
+        except Exception as error:
+            errors.append(f"{quality_bias}: {error}")
+    if best is None:
+        detail="; ".join(errors[-3:]) if errors else "no candidate plans were generated"
+        raise RuntimeError("Smart quality planning failed: " + detail)
+    best["summaries"]=summaries
+    return best
 
 def expected_remapped_paint_counts(source_counts, slot_map, oldn, newn):
     expected=Counter()
@@ -2014,7 +2226,8 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             mix_model="bambu", analysis_dir=None, texture_override=None,
             internal_colors=48, progress=lambda fraction,message: None):
     infile=Path(infile).expanduser().resolve()
-    quality_bias=max(0,min(100,int(quality_bias)))
+    quality_bias_mode="auto" if is_auto_quality_bias(quality_bias) else "manual"
+    quality_bias=DEFAULT_QUALITY_BIAS if quality_bias_mode=="auto" else clamp_quality_bias(quality_bias)
     if mix_model not in MIX_MODELS:
         raise RuntimeError(f"Unknown mixed-color prediction model {mix_model!r}")
     downloads=Path(output_dir).expanduser().resolve() if output_dir else Path.home()/"Downloads"
@@ -2090,14 +2303,30 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "custom":"a custom filament library",
             "exact-cmykw":"exact CMYKW roles",
         }[palette_source]
-        progress(0.22,"Generating anchors from painted colors and " + source_label)
-        anchors=select_anchors(old, usage, mode, inventory, palette_source,real_slots,
-                               custom_catalog_path,reference_result,mix_model,quality_bias)
+        smart_candidates=[]
+        if quality_bias_mode=="auto":
+            progress(0.22,"Testing smart quality/waste plans from painted usage and filament options")
+            plan=select_smart_palette(
+                old,usage,mode,inventory,palette_source,real_slots,
+                custom_catalog_path,reference_result,mix_model
+            )
+            quality_bias=plan["qualityBias"]
+            anchors=plan["anchors"]
+            newc,ism,comps,ratios,old_slot_to_new_slot,rows=plan["palette"]
+            smart_candidates=plan["summaries"]
+            progress(
+                0.34,
+                f"Smart plan selected quality {quality_bias}/100 with {len(anchors)} physical anchors and {len(newc)-len(anchors)} mixed slots",
+            )
+        else:
+            progress(0.22,"Generating anchors from painted colors and " + source_label)
+            anchors=select_anchors(old, usage, mode, inventory, palette_source,real_slots,
+                                   custom_catalog_path,reference_result,mix_model,quality_bias)
+            progress(0.34,"Building mixes with useful predicted visual gain")
+            newc,ism,comps,ratios,old_slot_to_new_slot,rows=build_palette(
+                old,anchors,usage,quality_bias,mix_model
+            )
         real_count=len(anchors)
-        progress(0.34,"Building mixes with useful predicted visual gain")
-        newc,ism,comps,ratios,old_slot_to_new_slot,rows=build_palette(
-            old,anchors,usage,quality_bias,mix_model
-        )
         newn=len(newc)
         if newn > MAX_BAMBU_PAINT_SLOT:
             raise RuntimeError(f"Output requires {newn} slots, but Bambu paint_color supports only {MAX_BAMBU_PAINT_SLOT}")
@@ -2123,6 +2352,10 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         validate_arrays(obj,newn,real_count,layouts,source_off_diagonal_zeros)
         pspath.write_text(json.dumps(obj,indent=2,ensure_ascii=True))
         quality=quality_metrics(rows,usage,old,reference_result,mix_model)
+        quality["resolvedQualityBias"]=quality_bias
+        quality["qualityBiasMode"]=quality_bias_mode
+        if smart_candidates:
+            quality["smartCandidates"]=smart_candidates
         printability=printability_metrics(rows,usage,real_count,newn,layouts,obj)
         mix_limit=quality_mix_limit(quality_bias)
         unmatched=[
@@ -2246,6 +2479,11 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "- Bambu uses integer percentage weights decoded from the saved four-decimal ratios; evaluating unrounded ratios can select a different swatch.",
             "- A material test print can still differ from the UI because filament translucency, layer height, surface and lighting are physical variables.",
         ]))
+        quality_line=(
+            f"Quality versus waste priority: Smart auto selected {quality_bias} / 100"
+            if quality_bias_mode=="auto"
+            else f"Quality versus waste priority: {quality_bias} / 100"
+        )
         report.write_text("\n".join([
             "FullSpectrum Studio conversion and validation report",
             f"Mode: {mode}",
@@ -2263,7 +2501,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             f"Patched model files: {', '.join(patched) if patched else 'none'}",
             f"Remapped object/part extruder assignments: {remapped_extruders}",
             f"Palette source: {palette_source}",
-            f"Quality versus waste priority: {quality_bias} / 100",
+            quality_line,
             "Mixed-color prediction: Bambu Studio FilamentMixer reconstruction",
             f"Mixed-color synchronization after reopen: Delta E {color_validation['maximumDeltaE']:.2f} (verified)",
             f"Inventory source: {'local Bambu Studio inventory selected (quantity details remain in the app only)' if inventory['source'] else 'not used for this palette source'}",
@@ -2334,6 +2572,8 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "sourceSlots":oldn,
             "realSlots":real_count,
             "outputSlots":newn,
+            "qualityBias":quality_bias,
+            "qualityBiasMode":quality_bias_mode,
             "validation":"OK",
             "paintedSlots":sorted(output_usage),
             "quality":quality,
@@ -2374,8 +2614,8 @@ def main():
     parser.add_argument("--real-slots",choices=["auto","2","3","4","5","6"],default="auto")
     parser.add_argument("--reference",help="Optional OBJ, GLB or texture image used as a visual reference")
     parser.add_argument("--custom-palette",help="JSON filament library for --palette-source custom")
-    parser.add_argument("--quality-bias",type=int,default=DEFAULT_QUALITY_BIAS,
-                        help="Quality versus waste priority from 0 (fewer mixes) to 100 (more detail)")
+    parser.add_argument("--quality-bias",default=str(DEFAULT_QUALITY_BIAS),
+                        help="Quality versus waste priority from 0-100, or auto for smart planning")
     parser.add_argument("--mix-model",choices=MIX_MODELS,default="bambu",
                         help="Mixed-color model used for planning, export and preview")
     parser.add_argument("--analysis-dir",help="Optional local destination for heatmap and anchor-influence preview meshes")

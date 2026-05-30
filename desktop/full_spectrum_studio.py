@@ -43,6 +43,7 @@ class StudioApp(tk.Tk):
         self.real_slots = tk.StringVar(value="auto")
         self.mix_model = tk.StringVar(value="bambu")
         self.quality_bias = tk.IntVar(value=60)
+        self.smart_quality = tk.BooleanVar(value=True)
         self.auto_open = tk.BooleanVar(value=True)
         self.output_application = tk.StringVar(value="Bambu Studio")
         self.progress = tk.DoubleVar(value=0)
@@ -105,13 +106,13 @@ class StudioApp(tk.Tk):
 
         slider = ttk.Frame(frame)
         slider.pack(fill="x", pady=(0, 16))
-        ttk.Label(slider, text="Quality vs waste").pack(side="left")
+        ttk.Checkbutton(slider, text="Smart quality", variable=self.smart_quality).pack(side="left")
         tk.Scale(
             slider, from_=0, to=100, orient="horizontal", variable=self.quality_bias,
             bg="#101721", fg="#d7e5ed", highlightthickness=0, troughcolor="#182331",
             length=320
         ).pack(side="left", padx=12)
-        ttk.Label(slider, text="Higher values preserve more mixed detail; lower values reduce complexity.", style="Small.TLabel").pack(side="left")
+        ttk.Label(slider, text="Auto tests practical/detail plans; manual slider remains available.", style="Small.TLabel").pack(side="left")
 
         ttk.Progressbar(frame, variable=self.progress, maximum=100).pack(fill="x", pady=(8, 10))
         ttk.Label(frame, textvariable=self.status, style="Small.TLabel").pack(anchor="w")
@@ -178,7 +179,7 @@ class StudioApp(tk.Tk):
             "strategy": self.strategy.get(),
             "source": self.source.get(),
             "real_slots": self.real_slots.get(),
-            "quality_bias": self.quality_bias.get(),
+            "quality_bias": "auto" if self.smart_quality.get() else self.quality_bias.get(),
             "mix_model": self.mix_model.get(),
             "reference": self.reference.get() or None,
             "texture": self.texture.get() or None,
@@ -213,6 +214,7 @@ class StudioApp(tk.Tk):
             text = [
                 f"Validated output: {result['output']}",
                 f"Physical slots: {result['realSlots']}   Mixed slots: {result['outputSlots'] - result['realSlots']}",
+                f"Quality/waste: {result.get('qualityBiasMode', 'manual')} {result.get('qualityBias', options['quality_bias'])}",
                 f"Quality: {result['quality']['qualityScore']:.1f} / 100   Mean dE: {result['quality']['estimatedDeltaE']:.2f}",
                 f"Confidence: {result['quality']['confidenceScore']:.1f} / 100   Contrast: {result['quality'].get('contrastRetention', 0):.1f}%",
                 f"Bambu color synchronization: dE {result['colorValidation']['maximumDeltaE']:.2f} max (verified)",

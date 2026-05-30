@@ -69,22 +69,45 @@ struct ConversionControlsCard: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("Quality vs waste")
+                    Text(store.smartQuality ? "Smart quality vs waste" : "Quality vs waste")
                     Spacer()
-                    Text("\(Int(store.qualityBias))")
-                        .monospacedDigit()
+                    if store.smartQuality {
+                        Text(store.result?.quality.resolvedQualityBias.map { "auto \($0)" } ?? "auto")
+                            .monospacedDigit()
+                    } else {
+                        Text("\(Int(store.qualityBias))")
+                            .monospacedDigit()
+                    }
                 }
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.7))
+                Toggle("Auto-select best quality and anchor parents", isOn: $store.smartQuality)
+                    .font(.caption2)
+                    .toggleStyle(.checkbox)
+                    .foregroundStyle(.white.opacity(0.62))
                 Slider(value: $store.qualityBias, in: 0...100, step: 5) {
                     Text("Quality versus waste")
                 }
+                .disabled(store.smartQuality)
+                .opacity(store.smartQuality ? 0.45 : 1)
                 .tint(.cyan)
-                Text(store.qualityBias < 40 ? "Practical: requires stronger visual gains before creating mixes." :
+                Text(store.smartQuality ? "Smart: tests practical, balanced and detail plans, then keeps the best validated palette." :
+                        store.qualityBias < 40 ? "Practical: requires stronger visual gains before creating mixes." :
                         store.qualityBias > 75 ? "Detail: permits more logical mixes and three-color candidates." :
                         "Balanced: suppresses weak mixes while keeping visible improvements.")
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.48))
+            }
+            .help("Smart mode chooses the quality threshold and physical anchor colors together, based on the final palette after mixed recipes are generated.")
+
+            if let resolved = store.result?.quality.resolvedQualityBias, store.result?.quality.qualityBiasMode == "auto" {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                    Text("Smart plan chose quality \(resolved)/100 for this model.")
+                        .monospacedDigit()
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.cyan.opacity(0.74))
             }
 
             Label(store.mixPrediction.title, systemImage: "checkmark.shield")

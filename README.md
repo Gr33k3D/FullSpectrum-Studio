@@ -147,8 +147,11 @@ context and a pre-slice complexity rating. It does not guess exact print time,
 swap count or filament grams from an unsliced painted project; those require
 sliced toolpaths.
 
-The quality-versus-waste control lets the user decide whether a predicted
-improvement is worth additional logical mixed colors.
+Smart quality mode is the recommended default. It tries practical, balanced and
+detail thresholds, scores the final palette after mixed recipes are generated,
+and selects the best tradeoff for the painted usage in that model. Manual
+quality-versus-waste values are still available when you want to force a simpler
+or more detailed result.
 
 ## macOS App
 
@@ -193,7 +196,7 @@ Painted `.3mf` conversion with a visual reference:
 
 ```bash
 python3 fullspectrum_engine.py --mode official --palette-source inventory \
-  --real-slots auto --quality-bias 60 --reference original.glb painted-project.3mf
+  --real-slots auto --quality-bias auto --reference original.glb painted-project.3mf
 ```
 
 Experimental textured OBJ import:

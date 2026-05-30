@@ -161,6 +161,8 @@ struct ConversionResult: Decodable {
     let sourceSlots: Int
     let realSlots: Int
     let outputSlots: Int
+    let qualityBias: Int?
+    let qualityBiasMode: String?
     let validation: String
     let paintedSlots: [Int]
     let inventory: InventorySnapshot
@@ -214,6 +216,8 @@ struct QualityMetrics: Decodable {
     let brightnessError: Double?
     let contrastRetention: Double?
     let mixModel: String
+    let resolvedQualityBias: Int?
+    let qualityBiasMode: String?
 }
 
 struct PrintabilityMetrics: Decodable {

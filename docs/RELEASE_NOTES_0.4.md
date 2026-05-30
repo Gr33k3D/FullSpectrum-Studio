@@ -18,6 +18,9 @@ fork.
 - Adds a quality-versus-waste control. Weak mix improvements are suppressed,
   identical recipes reuse one logical slot, and high-detail three-color
   candidates remain opt-in through the detail setting.
+- Adds smart quality planning. Auto mode tests practical, balanced and detail
+  thresholds, then selects the final palette using the generated mixed recipes
+  instead of relying only on nearest physical anchor colors.
 - Adds an opt-in optical-screen prediction experiment, labelled uncalibrated;
   conservative perceptual estimation remains the default.
 - Uses optional texture-reference colors as a limited contribution to physical
