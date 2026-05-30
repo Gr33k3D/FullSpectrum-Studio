@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.9 Official Release - 2026-05-31
+
+### Release
+
+- Promotes the v0.4.8 reliability work into an official macOS and Windows
+  release path instead of a community-preview-only package.
+- Keeps smart quality mode enabled by default so FullSpectrum tests practical,
+  balanced, detail and high-detail plans, then selects the best validated
+  palette for the model's painted usage.
+- Improves physical anchor selection by scoring final palettes after mixed
+  recipes are generated, which helps choose parent colors that actually produce
+  better reconstructed Bambu swatches.
+- Adds a catalog-region selector for Bambu planning colors on macOS and
+  Windows, and carries the selected region into warnings, JSON output and the
+  shareable report.
+- Keeps the catalog promise honest: the region is planning metadata only, and
+  FullSpectrum still does not check live Bambu store stock.
+- Updates the GitHub release workflow so plain tags such as `v0.4.9` create an
+  official latest release, while `*-community-preview` tags remain prereleases.
+
 ## 0.4.8 Community Preview - 2026-05-30
 
 ### Reliability

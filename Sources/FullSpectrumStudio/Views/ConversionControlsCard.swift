@@ -41,6 +41,30 @@ struct ConversionControlsCard: View {
                 .font(.caption)
                 .foregroundStyle(store.paletteSource == .inventory ? .cyan.opacity(0.68) : .orange.opacity(0.76))
 
+            if store.paletteSource == .catalog || store.paletteSource == .allBambu {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Catalog region")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.white.opacity(0.42))
+                        Spacer(minLength: 10)
+                        ReadableMenuPicker(
+                            selection: Binding(
+                                get: { store.catalogRegion },
+                                set: { store.catalogRegion = $0 }
+                            ),
+                            options: CatalogRegion.allCases,
+                            optionTitle: { $0.title }
+                        )
+                        .frame(width: 172)
+                    }
+                    Text("Planning region only. FullSpectrum does not check live Bambu store stock.")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.48))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             HStack {
                 ReadableMenuPicker(
                     selection: $store.realSlots,

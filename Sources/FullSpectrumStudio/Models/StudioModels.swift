@@ -43,10 +43,32 @@ enum PaletteSource: String, CaseIterable, Identifiable {
     var explanation: String {
         switch self {
         case .inventory: return "Only choose colors listed in your Bambu Studio Beta inventory."
-        case .catalog: return "Plan with supported PLA Basic, Matte and Silk+ colors; confirm regional stock."
+        case .catalog: return "Plan with supported PLA Basic, Matte and Silk+ colors for the selected planning region."
         case .allBambu: return "Core Bambu palette plus other active Bambu PLA types detected in your inventory."
         case .custom: return "Choose colors from a local JSON filament library."
         case .exactCMYKW: return "Use literal cyan, magenta, yellow, black and whites. Load matching physical colors."
+        }
+    }
+}
+
+enum CatalogRegion: String, CaseIterable, Identifiable {
+    case global
+    case europe = "eu"
+    case northAmerica = "us-ca"
+    case unitedKingdom = "uk"
+    case australiaNewZealand = "au-nz"
+    case asia
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .global: return "Global"
+        case .europe: return "Europe"
+        case .northAmerica: return "US / Canada"
+        case .unitedKingdom: return "United Kingdom"
+        case .australiaNewZealand: return "Australia / NZ"
+        case .asia: return "Asia"
         }
     }
 }
@@ -158,6 +180,8 @@ struct ConversionResult: Decodable {
     let colorValidationReport: String
     let mode: String
     let paletteSource: String
+    let catalogRegion: String?
+    let catalogRegionLabel: String?
     let sourceSlots: Int
     let realSlots: Int
     let outputSlots: Int

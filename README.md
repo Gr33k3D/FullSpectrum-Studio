@@ -7,13 +7,13 @@ their original painted appearance.
 It creates a separate converted `.3mf`, a recipe CSV and a validation report.
 The source project is never modified.
 
-This is an independent community preview built around the H2C public-beta
+This is an independent community release built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest public package: [v0.4.7 Community Preview](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.7-community-preview).
-The v0.4.7 package fixes the CMYKW quality-100 palette path so useful CMYK
-mixes are kept instead of collapsing warm painted regions to white, while
-retaining the repaired Windows and macOS release packaging.
+Latest public package: [v0.4.9 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.9).
+The v0.4.9 package promotes the reliability fixes from v0.4.8, keeps smart
+quality planning on by default, adds catalog-region selection for planning
+warnings and ships Windows plus macOS release assets from GitHub Actions.
 
 ## What It Does
 
@@ -26,6 +26,9 @@ retaining the repaired Windows and macOS release packaging.
 - Chooses `2-6` physical filament anchors automatically or manually, then adds
   only mixed recipes whose estimated visual gain justifies the extra logical
   color. Identical recipes reuse one slot.
+- Smart quality mode automatically compares practical, balanced, detail and
+  high-detail plans, then keeps the best validated result for the model's
+  painted usage.
 - Supports local Bambu Studio Beta inventory in read-only mode, Bambu PLA
   planning palettes, CMYKW workflows and custom local filament libraries.
 - Accepts an optional `.obj`, `.glb` or texture image as a visual reference and
@@ -97,12 +100,15 @@ remaining material.
 
 ### Bambu Core
 
-Plans with supported PLA Basic, PLA Matte and PLA Silk+ colors.
+Plans with supported PLA Basic, PLA Matte and PLA Silk+ colors. Choose the
+catalog planning region in the app so reports and warnings match the market
+you intend to check.
 
 ### All Bambu
 
 Allows additional Bambu PLA families discovered locally. Catalog colors are
-planning suggestions only; confirm current regional availability before buying.
+planning suggestions only; FullSpectrum does not check live store stock, so
+confirm current regional availability before buying.
 
 ### CMYKW
 
@@ -238,6 +244,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
+- [0.4.9 Release Notes](docs/RELEASE_NOTES_0.4.9.md)
 - [0.4.1 Reliability Notes](docs/RELEASE_NOTES_0.4.1.md)
 - [0.4.2 Button Fix Notes](docs/RELEASE_NOTES_0.4.2.md)
 - [0.4.3 Color Synchronization Notes](docs/RELEASE_NOTES_0.4.3.md)

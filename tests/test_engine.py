@@ -459,6 +459,39 @@ class ConversionTests(unittest.TestCase):
             self.assertGreaterEqual(len(output["quality"].get("smartCandidates", [])), 2)
             self.assertIn("Smart auto selected", Path(output["report"]).read_text())
 
+    def test_catalog_region_is_visible_in_outputs_and_reports(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            write_project(source)
+            output = ENGINE.convert(
+                source,
+                "official",
+                "catalog",
+                folder,
+                False,
+                "2",
+                catalog_region="eu",
+            )
+            self.assertEqual(output["catalogRegion"], "eu")
+            self.assertEqual(output["catalogRegionLabel"], "Europe")
+            self.assertTrue(any("Europe" in warning for warning in output["warnings"]))
+            self.assertIn("Catalog planning region: Europe", Path(output["report"]).read_text())
+
+    def test_unknown_catalog_region_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            write_project(source)
+            with self.assertRaisesRegex(RuntimeError, "Unknown catalog region"):
+                ENGINE.convert(
+                    source,
+                    "official",
+                    "catalog",
+                    folder,
+                    False,
+                    "2",
+                    catalog_region="mars",
+                )
+
     def test_anchor_selection_keeps_mix_parent_colors_when_they_improve_output(self):
         with tempfile.TemporaryDirectory() as folder_name:
             folder = Path(folder_name)

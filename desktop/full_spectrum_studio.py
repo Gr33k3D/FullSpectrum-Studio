@@ -40,6 +40,7 @@ class StudioApp(tk.Tk):
         self.custom = tk.StringVar()
         self.strategy = tk.StringVar(value="official")
         self.source = tk.StringVar(value="inventory")
+        self.catalog_region = tk.StringVar(value="global")
         self.real_slots = tk.StringVar(value="auto")
         self.mix_model = tk.StringVar(value="bambu")
         self.quality_bias = tk.IntVar(value=60)
@@ -93,8 +94,12 @@ class StudioApp(tk.Tk):
         self.combo(choices, "Strategy", self.strategy, ["official", "cmykw"], 0)
         self.combo(choices, "Filaments", self.source, ["inventory", "catalog", "all-bambu", "custom", "exact-cmykw"], 1)
         self.combo(choices, "Physical slots", self.real_slots, ["auto", "2", "3", "4", "5", "6"], 2)
-        ttk.Label(choices, text="Prediction").grid(row=0, column=3, sticky="w", padx=(0, 20))
-        ttk.Label(choices, text="Bambu reconstruction", style="Small.TLabel").grid(row=1, column=3, sticky="w", padx=(0, 20), pady=4)
+        self.combo(choices, "Catalog region", self.catalog_region, ["global", "eu", "us-ca", "uk", "au-nz", "asia"], 3)
+        ttk.Label(
+            frame,
+            text="Catalog region is planning metadata only; FullSpectrum does not check live Bambu store stock.",
+            style="Small.TLabel",
+        ).pack(anchor="w", pady=(0, 12))
         handoff = ttk.Frame(frame)
         handoff.pack(fill="x", pady=(0, 12))
         ttk.Checkbutton(handoff, text="Open validated output in", variable=self.auto_open).pack(side="left")
@@ -178,6 +183,7 @@ class StudioApp(tk.Tk):
         options = {
             "strategy": self.strategy.get(),
             "source": self.source.get(),
+            "catalog_region": self.catalog_region.get(),
             "real_slots": self.real_slots.get(),
             "quality_bias": "auto" if self.smart_quality.get() else self.quality_bias.get(),
             "mix_model": self.mix_model.get(),
@@ -208,6 +214,7 @@ class StudioApp(tk.Tk):
                 custom_catalog_path=options["custom"],
                 texture_override=options["texture"],
                 quality_bias=options["quality_bias"],
+                catalog_region=options["catalog_region"],
                 mix_model=options["mix_model"],
                 progress=report,
             )
@@ -215,6 +222,7 @@ class StudioApp(tk.Tk):
                 f"Validated output: {result['output']}",
                 f"Physical slots: {result['realSlots']}   Mixed slots: {result['outputSlots'] - result['realSlots']}",
                 f"Quality/waste: {result.get('qualityBiasMode', 'manual')} {result.get('qualityBias', options['quality_bias'])}",
+                f"Catalog planning region: {result.get('catalogRegionLabel', options['catalog_region'])}",
                 f"Quality: {result['quality']['qualityScore']:.1f} / 100   Mean dE: {result['quality']['estimatedDeltaE']:.2f}",
                 f"Confidence: {result['quality']['confidenceScore']:.1f} / 100   Contrast: {result['quality'].get('contrastRetention', 0):.1f}%",
                 f"Bambu color synchronization: dE {result['colorValidation']['maximumDeltaE']:.2f} max (verified)",

@@ -94,11 +94,19 @@ MAX_REFERENCE_BYTES = 600 * 1024 * 1024
 MAX_IMPORT_FACES = 2_000_000
 MAX_INTERACTIVE_PREVIEW_TRIANGLES = 750_000
 OPTIMIZED_PREVIEW_GRID_RESOLUTION = 72
-OUTPUT_VERSION = "v0.4.8"
+OUTPUT_VERSION = "v0.4.9"
 DEFAULT_QUALITY_BIAS = 60
 SMART_QUALITY_CANDIDATES = (35, 60, 80, 100)
 ANCHOR_BEAM_WIDTH = 8
 ANCHOR_POOL_LIMIT = 64
+CATALOG_REGIONS = {
+    "global": "Global planning",
+    "eu": "Europe",
+    "us-ca": "United States / Canada",
+    "uk": "United Kingdom",
+    "au-nz": "Australia / New Zealand",
+    "asia": "Asia",
+}
 MIX_MODELS = ("bambu",)
 HEX_DIGITS = "0123456789ABCDEF"
 PAINT_PATTERN = re.compile(r'paint_color="([^"]+)"')
@@ -136,6 +144,12 @@ def quality_mix_limit(quality_bias):
         return MAX_RELIABLE_MIX_DE
     span=100-DEFAULT_QUALITY_BIAS
     return MAX_RELIABLE_MIX_DE + (MAX_HIGH_QUALITY_MIX_DE-MAX_RELIABLE_MIX_DE) * ((quality_bias-DEFAULT_QUALITY_BIAS)/span)
+
+def catalog_region_label(region):
+    key=str(region or "global").strip().lower()
+    if key not in CATALOG_REGIONS:
+        raise RuntimeError("Unknown catalog region. Choose one of: " + ", ".join(CATALOG_REGIONS))
+    return CATALOG_REGIONS[key]
 
 def hx(c):
     c=str(c).strip()
@@ -1831,7 +1845,7 @@ def additional_anchor_recommendation(old_colors, usage, anchors, palette_source,
         "estimatedDeltaEReduction":round(gain,2),
         "estimatedQualityScore":metrics["qualityScore"],
         "estimatedMixedSlots":mix_count,
-        "availability":"owned" if palette_source=="inventory" else "confirm before purchase",
+        "availability":"owned" if palette_source=="inventory" else "confirm in selected catalog region",
     }
 
 def smart_quality_plan_score(metrics, rows, usage, real_count, output_count, quality_bias):
@@ -2224,10 +2238,12 @@ def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_
 def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=True, real_slots="auto",
             reference=None, custom_catalog_path=None, quality_bias=DEFAULT_QUALITY_BIAS,
             mix_model="bambu", analysis_dir=None, texture_override=None,
-            internal_colors=48, progress=lambda fraction,message: None):
+            internal_colors=48, catalog_region="global", progress=lambda fraction,message: None):
     infile=Path(infile).expanduser().resolve()
     quality_bias_mode="auto" if is_auto_quality_bias(quality_bias) else "manual"
     quality_bias=DEFAULT_QUALITY_BIAS if quality_bias_mode=="auto" else clamp_quality_bias(quality_bias)
+    catalog_region=str(catalog_region or "global").strip().lower()
+    region_label=catalog_region_label(catalog_region)
     if mix_model not in MIX_MODELS:
         raise RuntimeError(f"Unknown mixed-color prediction model {mix_model!r}")
     downloads=Path(output_dir).expanduser().resolve() if output_dir else Path.home()/"Downloads"
@@ -2273,7 +2289,10 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             progress(0.12,"Using user supplied filament library")
         else:
             progress(0.12,f"Using {len(catalog_palette('all' if palette_source=='all-bambu' else 'core',inventory))} Bambu Lab planning colors")
-            warnings.append("Catalog colors are planning choices; confirm current regional availability before buying filament.")
+            warnings.append(
+                f"Catalog colors are planning choices for {region_label}. "
+                "FullSpectrum does not check live store stock; verify availability before buying filament."
+            )
         progress(0.14,"Extracting and scanning source 3MF archive")
         with zipfile.ZipFile(project_file) as z:
             names=z.namelist()
@@ -2501,6 +2520,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             f"Patched model files: {', '.join(patched) if patched else 'none'}",
             f"Remapped object/part extruder assignments: {remapped_extruders}",
             f"Palette source: {palette_source}",
+            f"Catalog planning region: {region_label}",
             quality_line,
             "Mixed-color prediction: Bambu Studio FilamentMixer reconstruction",
             f"Mixed-color synchronization after reopen: Delta E {color_validation['maximumDeltaE']:.2f} (verified)",
@@ -2569,6 +2589,8 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "colorValidationReport":str(color_report),
             "mode":mode,
             "paletteSource":palette_source,
+            "catalogRegion":catalog_region,
+            "catalogRegionLabel":region_label,
             "sourceSlots":oldn,
             "realSlots":real_count,
             "outputSlots":newn,
@@ -2618,6 +2640,8 @@ def main():
                         help="Quality versus waste priority from 0-100, or auto for smart planning")
     parser.add_argument("--mix-model",choices=MIX_MODELS,default="bambu",
                         help="Mixed-color model used for planning, export and preview")
+    parser.add_argument("--catalog-region",choices=sorted(CATALOG_REGIONS),default="global",
+                        help="Planning market shown in catalog warnings and reports")
     parser.add_argument("--analysis-dir",help="Optional local destination for heatmap and anchor-influence preview meshes")
     parser.add_argument("--texture",help="PNG/JPEG texture override used with experimental OBJ import")
     parser.add_argument("--internal-colors",type=int,default=48,
@@ -2674,6 +2698,7 @@ def main():
                     analysis_dir=args.analysis_dir,
                     texture_override=args.texture,
                     internal_colors=args.internal_colors,
+                    catalog_region=args.catalog_region,
                     progress=reporter,
                 )
         if args.json_output:

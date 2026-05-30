@@ -116,6 +116,7 @@ struct ConverterService {
         customPalette: URL?,
         textureOverride: URL?,
         qualityBias: String,
+        catalogRegion: CatalogRegion,
         mixPrediction: MixPrediction,
         outputDirectory: URL,
         progress: @escaping @Sendable (Double, String) -> Void
@@ -128,6 +129,7 @@ struct ConverterService {
                 "--palette-source", paletteSource.rawValue,
                 "--real-slots", realSlots.rawValue,
                 "--quality-bias", qualityBias,
+                "--catalog-region", catalogRegion.rawValue,
                 "--mix-model", mixPrediction.rawValue,
                 "--analysis-dir", analysisDirectory.path,
                 "--output-dir", outputDirectory.path,

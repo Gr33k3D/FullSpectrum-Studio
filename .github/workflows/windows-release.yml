@@ -112,7 +112,7 @@ jobs:
           pattern: FullSpectrum-Studio-*
           path: release
           merge-multiple: true
-      - name: Create or repair community preview release
+      - name: Create or repair release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -122,16 +122,32 @@ jobs:
           if [[ ! -f "$NOTES_FILE" ]]; then
             NOTES_FILE="docs/RELEASE_NOTES_0.4.3.md"
           fi
-          TITLE="FullSpectrum Studio v${VERSION} Community Preview"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release edit "$GITHUB_REF_NAME" \
-              --prerelease \
-              --title "$TITLE" \
-              --notes-file "$NOTES_FILE"
-            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          if [[ "$GITHUB_REF_NAME" == *"-community-preview" ]]; then
+            TITLE="FullSpectrum Studio v${VERSION} Community Preview"
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release edit "$GITHUB_REF_NAME" \
+                --prerelease \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+              gh release upload "$GITHUB_REF_NAME" release/* --clobber
+            else
+              gh release create "$GITHUB_REF_NAME" release/* \
+                --prerelease \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+            fi
           else
-            gh release create "$GITHUB_REF_NAME" release/* \
-              --prerelease \
-              --title "$TITLE" \
-              --notes-file "$NOTES_FILE"
+            TITLE="FullSpectrum Studio v${VERSION} Official Release"
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release edit "$GITHUB_REF_NAME" \
+                --latest \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+              gh release upload "$GITHUB_REF_NAME" release/* --clobber
+            else
+              gh release create "$GITHUB_REF_NAME" release/* \
+                --latest \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+            fi
           fi

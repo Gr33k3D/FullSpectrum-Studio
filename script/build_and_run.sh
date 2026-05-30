@@ -6,8 +6,8 @@ APP_NAME="FullSpectrum Studio"
 EXECUTABLE_NAME="FullSpectrumStudio"
 BUNDLE_ID="studio.fullspectrum.macos"
 MIN_SYSTEM_VERSION="14.0"
-APP_VERSION="${FULLSPECTRUM_VERSION:-0.4.8}"
-APP_BUILD="${FULLSPECTRUM_BUILD:-10}"
+APP_VERSION="${FULLSPECTRUM_VERSION:-0.4.9}"
+APP_BUILD="${FULLSPECTRUM_BUILD:-11}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -19,6 +19,13 @@ APP_BINARY="$APP_MACOS/$EXECUTABLE_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 
 pkill -x "$EXECUTABLE_NAME" >/dev/null 2>&1 || true
+
+scrub_bundle_metadata() {
+  /usr/bin/xattr -cr "$APP_BUNDLE" >/dev/null 2>&1 || true
+  /usr/bin/xattr -d com.apple.FinderInfo "$APP_BUNDLE" >/dev/null 2>&1 || true
+  /usr/bin/xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_BUNDLE" >/dev/null 2>&1 || true
+  /usr/bin/xattr -d com.apple.macl "$APP_BUNDLE" >/dev/null 2>&1 || true
+}
 
 cd "$ROOT_DIR"
 swift build -c release
@@ -56,7 +63,7 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundleVersion</key>
   <string>$APP_BUILD</string>
   <key>CFBundleGetInfoString</key>
-  <string>Community Preview - validated local reduced-filament workflow</string>
+  <string>Official Release - validated local reduced-filament workflow</string>
   <key>LSMinimumSystemVersion</key>
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
@@ -84,7 +91,7 @@ PLIST
 
 # Seal the completed bundle after all resources have been copied. This is an
 # ad-hoc signature for community downloads, not Developer ID notarization.
-/usr/bin/xattr -cr "$APP_BUNDLE"
+scrub_bundle_metadata
 /usr/bin/codesign --force --deep --sign - --timestamp=none "$APP_BUNDLE"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
@@ -95,7 +102,7 @@ open_app() {
 strict_verify_bundle() {
   local verified=0
   for _ in 1 2 3; do
-    /usr/bin/xattr -cr "$APP_BUNDLE"
+    scrub_bundle_metadata
     if /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"; then
       verified=1
       break

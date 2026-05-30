@@ -41,6 +41,7 @@ final class StudioStore: ObservableObject {
     @Published var progressMessage = "Waiting for a model."
     @Published var errorReport: StudioErrorReport?
     @AppStorage("smartQuality") var smartQuality = true
+    @AppStorage("catalogRegion") private var catalogRegionRawValue = CatalogRegion.global.rawValue
     @AppStorage("autoOpenValidatedOutput") var autoOpenValidatedOutput = true
     @AppStorage("outputApplication") private var outputApplicationRawValue = OutputApplication.bambuStudio.rawValue
     @AppStorage("restoreLastSession") var restoreLastSession = false
@@ -63,6 +64,11 @@ final class StudioStore: ObservableObject {
     var outputApplication: OutputApplication {
         get { OutputApplication(rawValue: outputApplicationRawValue) ?? .bambuStudio }
         set { outputApplicationRawValue = newValue.rawValue }
+    }
+
+    var catalogRegion: CatalogRegion {
+        get { CatalogRegion(rawValue: catalogRegionRawValue) ?? .global }
+        set { catalogRegionRawValue = newValue.rawValue }
     }
 
     init() {
@@ -377,6 +383,7 @@ final class StudioStore: ObservableObject {
         let capturedPrediction = mixPrediction
         let capturedSmartQuality = smartQuality
         let capturedQualityBias = Int(qualityBias)
+        let capturedCatalogRegion = catalogRegion
         startActivityMonitor(label: "Conversion")
         conversionTask = Task {
             let temporaryAccess = beginTemporaryAccess(to: [capturedReference, capturedPalette, capturedTexture])
@@ -391,6 +398,7 @@ final class StudioStore: ObservableObject {
                     customPalette: capturedPalette,
                     textureOverride: capturedTexture,
                     qualityBias: capturedSmartQuality ? "auto" : String(capturedQualityBias),
+                    catalogRegion: capturedCatalogRegion,
                     mixPrediction: capturedPrediction,
                     outputDirectory: file.deletingLastPathComponent(),
                     progress: { [weak self] value, message in
