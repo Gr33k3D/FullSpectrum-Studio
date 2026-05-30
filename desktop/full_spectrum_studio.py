@@ -7,7 +7,10 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
+import traceback
 import tkinter as tk
+from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -44,19 +47,33 @@ class StudioApp(tk.Tk):
         self.output_application = tk.StringVar(value="Bambu Studio")
         self.progress = tk.DoubleVar(value=0)
         self.status = tk.StringVar(value="Choose a painted .3mf or textured OBJ / GLB source to begin.")
+        self.cancel_requested = False
+        self.worker_active = False
+        self.last_progress_time = time.monotonic()
+        self.last_engine_message = "Waiting for a model."
+        self.last_error_report = ""
+        self.last_error_log = None
         self._build()
 
     def _build(self):
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure(".", background="#101721", foreground="#e9f0f5", fieldbackground="#182331")
-        style.configure("TButton", padding=8)
+        style.configure("TButton", padding=8, foreground="#f6fbff", background="#233041")
+        style.map("TButton", foreground=[("active", "#ffffff"), ("pressed", "#ffffff"), ("disabled", "#7f91a0")], background=[("active", "#2f4056"), ("pressed", "#1d2a3a")])
+        style.configure("TCombobox", foreground="#f6fbff", fieldbackground="#182331", background="#233041", arrowcolor="#f6fbff")
+        style.map("TCombobox", foreground=[("readonly", "#f6fbff")], fieldbackground=[("readonly", "#182331")], selectforeground=[("readonly", "#f6fbff")], selectbackground=[("readonly", "#182331")])
         style.configure("Title.TLabel", font=("Segoe UI", 22, "bold"), foreground="#f6fbff")
         style.configure("Small.TLabel", foreground="#9cb4c5")
         frame = ttk.Frame(self, padding=24)
         frame.pack(fill="both", expand=True)
         ttk.Label(frame, text="FullSpectrum Studio", style="Title.TLabel").pack(anchor="w")
         ttk.Label(frame, text="Local reduced-filament workflow for painted Bambu projects", style="Small.TLabel").pack(anchor="w", pady=(0, 22))
+        ttk.Label(
+            frame,
+            text="Reduces/remaps existing Bambu paint states. It does not repaint, smooth or clean up painted regions.",
+            style="Small.TLabel",
+        ).pack(anchor="w", pady=(0, 12))
 
         for title, variable, action in [
             ("Painted 3MF project or textured OBJ / GLB (experimental)", self.project, self.choose_project),
@@ -102,8 +119,12 @@ class StudioApp(tk.Tk):
         buttons.pack(fill="x", pady=18)
         self.convert_button = ttk.Button(buttons, text="Convert and Validate", command=self.convert)
         self.convert_button.pack(side="left")
+        self.cancel_button = ttk.Button(buttons, text="Cancel", command=self.cancel_conversion, state="disabled")
+        self.cancel_button.pack(side="left", padx=8)
         self.folder_button = ttk.Button(buttons, text="Show Output", command=self.open_folder, state="disabled")
         self.folder_button.pack(side="left", padx=8)
+        self.copy_error_button = ttk.Button(buttons, text="Copy Error Report", command=self.copy_error_report, state="disabled")
+        self.copy_error_button.pack(side="left", padx=8)
         self.output = tk.Text(frame, height=14, bg="#121c28", fg="#d7e5ed", insertbackground="white", relief="flat", padx=12, pady=12)
         self.output.pack(fill="both", expand=True)
 
@@ -143,8 +164,16 @@ class StudioApp(tk.Tk):
             messagebox.showerror("FullSpectrum Studio", "Choose a custom filament JSON library.")
             return
         self.convert_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
+        self.copy_error_button.configure(state="disabled")
         self.output.delete("1.0", "end")
         self.progress.set(0)
+        self.cancel_requested = False
+        self.worker_active = True
+        self.last_error_report = ""
+        self.last_error_log = None
+        self.record_progress(0, "Starting conversion.")
+        self.start_heartbeat()
         options = {
             "strategy": self.strategy.get(),
             "source": self.source.get(),
@@ -161,7 +190,11 @@ class StudioApp(tk.Tk):
 
     def _run_conversion(self, source, options):
         def report(fraction, message):
-            self.after(0, lambda: (self.progress.set(fraction * 100), self.status.set(message)))
+            if self.cancel_requested:
+                raise RuntimeError("Conversion cancelled by user.")
+            self.last_progress_time = time.monotonic()
+            self.last_engine_message = message
+            self.after(0, lambda: self.record_progress(fraction, message))
         try:
             result = ENGINE.convert(
                 source,
@@ -194,19 +227,96 @@ class StudioApp(tk.Tk):
             if options["auto_open"]:
                 self.open_validated_output(result["output"], options["output_application"])
         except Exception as error:
-            self.after(0, lambda: self.fail(str(error)))
+            details = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+            self.after(0, lambda: self.fail(str(error) or error.__class__.__name__, details))
 
     def finish(self, text):
+        self.worker_active = False
         self.output.insert("1.0", text)
         self.status.set("Conversion validated and ready.")
         self.progress.set(100)
         self.convert_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
         self.folder_button.configure(state="normal")
 
-    def fail(self, message):
-        self.status.set("Conversion failed.")
+    def fail(self, message, details=None):
+        self.worker_active = False
+        self.status.set("Conversion cancelled." if self.cancel_requested else "Conversion failed.")
         self.convert_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
+        self.copy_error_button.configure(state="normal")
+        self.output.delete("1.0", "end")
+        report = self.build_error_report(message, details)
+        self.output.insert("1.0", report)
         messagebox.showerror("FullSpectrum Studio", message)
+
+    def cancel_conversion(self):
+        self.cancel_requested = True
+        self.status.set("Cancelling at the next safe engine checkpoint...")
+
+    def record_progress(self, fraction, message):
+        self.progress.set(fraction * 100)
+        self.status.set(message)
+
+    def start_heartbeat(self):
+        self.after(5000, self.check_heartbeat)
+
+    def check_heartbeat(self):
+        if not self.worker_active:
+            return
+        if self.cancel_requested:
+            self.status.set("Cancelling at the next safe engine checkpoint...")
+        else:
+            idle = time.monotonic() - self.last_progress_time
+            if idle >= 90:
+                self.status.set(f"Possibly stuck at: {self.last_engine_message}")
+            elif idle >= 20:
+                self.status.set(f"Still working: {self.last_engine_message}")
+        self.after(5000, self.check_heartbeat)
+
+    def build_error_report(self, message, details=None):
+        body = "\n".join([
+            "FullSpectrum Studio conversion error",
+            "",
+            message,
+            "",
+            details or message,
+        ])
+        self.last_error_log = self.write_debug_log(body)
+        if self.last_error_log:
+            body = "\n".join([body, "", f"Debug log: {self.last_error_log}"])
+        self.last_error_report = body
+        return body
+
+    def write_debug_log(self, report):
+        try:
+            if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+                root = Path(os.environ["LOCALAPPDATA"]) / "FullSpectrumStudio" / "Logs"
+            elif sys.platform == "darwin":
+                root = Path.home() / "Library" / "Logs" / "FullSpectrumStudio"
+            else:
+                root = Path.home() / ".cache" / "FullSpectrumStudio" / "Logs"
+            root.mkdir(parents=True, exist_ok=True)
+            path = root / f"conversion-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+            path.write_text(
+                "\n".join([
+                    "FullSpectrum Studio desktop debug log",
+                    f"Created: {datetime.now(timezone.utc).isoformat()}",
+                    "",
+                    report,
+                ]),
+                encoding="utf-8",
+            )
+            return path
+        except Exception:
+            return None
+
+    def copy_error_report(self):
+        if not self.last_error_report:
+            return
+        self.clipboard_clear()
+        self.clipboard_append(self.last_error_report)
+        self.status.set("Error report copied.")
 
     def open_folder(self):
         if not hasattr(self, "last_output"):

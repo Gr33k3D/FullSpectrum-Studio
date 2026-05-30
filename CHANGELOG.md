@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.8 Community Preview - 2026-05-30
+
+### Reliability
+
+- Drains conversion engine stdout and stderr continuously from the macOS app so
+  large JSON conversion results cannot fill the pipe and stall the Python child
+  process before exit.
+- Surfaces real engine exceptions, tracebacks and JSON decode failures instead
+  of falling back to vague messages such as `none`.
+- Writes local conversion debug logs for failed macOS conversions and adds a
+  copyable error report.
+- Shows Windows desktop-shell tracebacks in the output panel, writes a local
+  debug log and adds a copy error report action.
+- Adds progress heartbeat text for long-running conversions and possible
+  stalls, plus a Cancel/Stop control that terminates the active macOS Python
+  conversion process.
+
+### User Interface
+
+- Keeps browse/action button text and selected picker values readable in dark
+  mode on macOS and in the Windows desktop shell.
+- Makes custom JSON palette selection resume the conversion that asked for it.
+- States in the UI and docs that FullSpectrum remaps existing Bambu paint
+  states; it does not repaint, smooth or clean up a badly painted source model.
+
 ## 0.4.3 Community Preview - 2026-05-27
 
 ### Critical Fix

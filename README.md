@@ -17,6 +17,10 @@ retaining the repaired Windows and macOS release packaging.
 
 ## What It Does
 
+- Reduces and remaps existing Bambu painted `.3mf` projects. FullSpectrum does
+  not repaint a model, smooth noisy paint regions or clean up a bad source
+  paint job; it preserves the existing paint states as honestly as it can while
+  reducing the filament plan.
 - Reads Bambu serialized `paint_color` states from the model itself instead of
   assuming that paint order equals filament order.
 - Chooses `2-6` physical filament anchors automatically or manually, then adds
@@ -40,6 +44,11 @@ retaining the repaired Windows and macOS release packaging.
   viewer blank or forcing a full multi-million-triangle display build.
 - Can hand a validated output directly to Bambu Studio or OrcaSlicer when the
   selected slicer is installed.
+
+Very complex or noisy painted files can still be hard cases: conversion may be
+slow, and the result can only be as clean as the source paint-state data it is
+asked to remap. Current builds write a local debug log and show copyable error
+details when the engine cannot finish or the app cannot decode its result.
 
 ## Preview
 
@@ -230,8 +239,10 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [0.4.2 Button Fix Notes](docs/RELEASE_NOTES_0.4.2.md)
 - [0.4.3 Color Synchronization Notes](docs/RELEASE_NOTES_0.4.3.md)
 - [0.4.7 CMYKW Quality Notes](docs/RELEASE_NOTES_0.4.7.md)
+- [0.4.8 Reliability Notes](docs/RELEASE_NOTES_0.4.8.md)
 - [OrcaSlicer Handoff](docs/ORCASLICER_HANDOFF.md)
 - [Bambu Forum Update Draft](docs/BAMBU_FORUM_POST_v0.4.3.md)
+- [Bambu Forum Reliability Reply Draft](docs/BAMBU_FORUM_REPLY_RELIABILITY_2026-05-30.md)
 
 ## License
 

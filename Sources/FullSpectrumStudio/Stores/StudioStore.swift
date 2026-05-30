@@ -3,6 +3,13 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct StudioErrorReport: Identifiable {
+    let id = UUID()
+    let message: String
+    let details: String
+    let logURL: URL?
+}
+
 @MainActor
 final class StudioStore: ObservableObject {
     @Published var mode: PaletteMode = .official
@@ -32,6 +39,7 @@ final class StudioStore: ObservableObject {
     @Published var isRefreshingInventory = false
     @Published var progress = 0.0
     @Published var progressMessage = "Waiting for a model."
+    @Published var errorReport: StudioErrorReport?
     @AppStorage("autoOpenValidatedOutput") var autoOpenValidatedOutput = true
     @AppStorage("outputApplication") private var outputApplicationRawValue = OutputApplication.bambuStudio.rawValue
     @AppStorage("restoreLastSession") var restoreLastSession = false
@@ -44,6 +52,9 @@ final class StudioStore: ObservableObject {
     private var conversionID = UUID()
     private var conversionTask: Task<Void, Never>?
     private var outputPreviewTask: Task<Void, Never>?
+    private var activityMonitorTask: Task<Void, Never>?
+    private var lastProgressDate = Date()
+    private var lastEngineMessage = "Waiting for a model."
     private var retainedSourceURL: URL?
     private var retainedSourceAccess = false
     private let immediateImportedPreviewByteLimit = 48 * 1024 * 1024
@@ -69,7 +80,7 @@ final class StudioStore: ObservableObject {
             do {
                 inventory = try await service.inventory()
             } catch {
-                errorMessage = error.localizedDescription
+                present(error)
             }
             isRefreshingInventory = false
         }
@@ -108,7 +119,7 @@ final class StudioStore: ObservableObject {
         }
     }
 
-    func chooseCustomPaletteFile() {
+    func chooseCustomPaletteFile(startConversionAfterSelection: Bool = false) {
         chooseFile(
             title: "Choose Filament Library",
             message: "Choose a local JSON file describing custom filament colors.",
@@ -116,6 +127,9 @@ final class StudioStore: ObservableObject {
             choosingStatus: "Choose a custom filament JSON library."
         ) { [weak self] url in
             self?.acceptCustomPalette(url: url)
+            if startConversionAfterSelection {
+                self?.convert()
+            }
         }
     }
 
@@ -182,6 +196,7 @@ final class StudioStore: ObservableObject {
         progress = 0
         progressMessage = "Reading model metadata."
         errorMessage = nil
+        errorReport = nil
         status = ["obj", "glb"].contains(extensionName)
             ? "Opening textured source and analyzing paint colors..."
             : "Reading project preview and material slots..."
@@ -211,7 +226,7 @@ final class StudioStore: ObservableObject {
                     return
                 } catch {
                     guard inspectionID == currentInspectionID else { return }
-                    errorMessage = error.localizedDescription
+                    present(error)
                     status = "Could not open that project."
                     isBuildingPreview = false
                 }
@@ -253,6 +268,7 @@ final class StudioStore: ObservableObject {
     ) {
         previewTask?.cancel()
         isBuildingPreview = true
+        startActivityMonitor(label: "Preview")
         previewTask = Task {
             let temporaryAccess = beginTemporaryAccess(to: [textureOverride])
             defer { endTemporaryAccess(temporaryAccess) }
@@ -265,8 +281,7 @@ final class StudioStore: ObservableObject {
                     progress: { [weak self] value, message in
                         Task { @MainActor in
                             guard self?.inspectionID == currentInspectionID else { return }
-                            self?.progress = value
-                            self?.progressMessage = message
+                            self?.recordProgress(value, message)
                         }
                     }
                 )
@@ -289,7 +304,7 @@ final class StudioStore: ObservableObject {
                 return
             } catch {
                 guard inspectionID == currentInspectionID else { return }
-                errorMessage = error.localizedDescription
+                present(error)
                 status = "Could not open that project."
             }
             if inspectionID == currentInspectionID {
@@ -297,6 +312,7 @@ final class StudioStore: ObservableObject {
                 progress = 0
                 progressMessage = "Ready for conversion."
                 previewTask = nil
+                stopActivityMonitorIfIdle()
             }
         }
     }
@@ -304,7 +320,7 @@ final class StudioStore: ObservableObject {
     func acceptReference(url: URL) {
         let supported = ["obj", "glb", "png", "jpg", "jpeg", "bmp", "tif", "tiff"]
         guard supported.contains(url.pathExtension.lowercased()) else {
-            errorMessage = "Reference mode accepts OBJ, GLB or a texture image."
+            present(message: "Reference mode accepts OBJ, GLB or a texture image.")
             return
         }
         referenceURL = url
@@ -314,7 +330,7 @@ final class StudioStore: ObservableObject {
 
     func acceptCustomPalette(url: URL) {
         guard url.pathExtension.lowercased() == "json" else {
-            errorMessage = "Custom filament libraries must be JSON files."
+            present(message: "Custom filament libraries must be JSON files.")
             return
         }
         customPaletteURL = url
@@ -323,7 +339,7 @@ final class StudioStore: ObservableObject {
 
     func acceptTextureOverride(url: URL) {
         guard ["png", "jpg", "jpeg"].contains(url.pathExtension.lowercased()) else {
-            errorMessage = "OBJ import textures must be PNG or JPEG files."
+            present(message: "OBJ import textures must be PNG or JPEG files.")
             return
         }
         textureOverrideURL = url
@@ -338,11 +354,12 @@ final class StudioStore: ObservableObject {
             return
         }
         if paletteSource == .custom && customPaletteURL == nil {
-            chooseCustomPaletteFile()
+            chooseCustomPaletteFile(startConversionAfterSelection: true)
             return
         }
         isWorking = true
         errorMessage = nil
+        errorReport = nil
         progress = 0
         progressMessage = "Starting conversion."
         status = "Converting painted facets and validating the output..."
@@ -357,6 +374,7 @@ final class StudioStore: ObservableObject {
         let capturedPalette = customPaletteURL
         let capturedTexture = textureOverrideURL
         let capturedPrediction = mixPrediction
+        startActivityMonitor(label: "Conversion")
         conversionTask = Task {
             let temporaryAccess = beginTemporaryAccess(to: [capturedReference, capturedPalette, capturedTexture])
             defer { endTemporaryAccess(temporaryAccess) }
@@ -375,8 +393,7 @@ final class StudioStore: ObservableObject {
                     progress: { [weak self] value, message in
                         Task { @MainActor in
                             guard self?.conversionID == currentConversionID else { return }
-                            self?.progress = value
-                            self?.progressMessage = message
+                            self?.recordProgress(value, message)
                         }
                     }
                 )
@@ -401,13 +418,16 @@ final class StudioStore: ObservableObject {
                 progressMessage = "Cancelled."
             } catch {
                 guard conversionID == currentConversionID else { return }
-                errorMessage = error.localizedDescription
+                outputPreviewTask?.cancel()
+                outputPreviewTask = nil
+                present(error)
                 status = "Conversion failed."
                 progressMessage = "Conversion failed."
             }
             if conversionID == currentConversionID {
                 isWorking = false
                 conversionTask = nil
+                stopActivityMonitorIfIdle()
             }
         }
     }
@@ -427,6 +447,7 @@ final class StudioStore: ObservableObject {
         isBuildingPreview = false
         status = "Conversion cancelled."
         progressMessage = "Cancelled."
+        stopActivityMonitorIfIdle()
     }
 
     func cancelPreview() {
@@ -439,6 +460,15 @@ final class StudioStore: ObservableObject {
         progress = 0
         progressMessage = "Preview stopped."
         status = inspection == nil ? "Preview stopped. Choose a source to try again." : "Ready for conversion. Interactive preview stopped."
+        stopActivityMonitorIfIdle()
+    }
+
+    func cancelActiveOperation() {
+        if isWorking {
+            cancelConversion()
+        } else if isBuildingPreview {
+            cancelPreview()
+        }
     }
 
     private func buildOutputPreview(for path: String, conversionID currentConversionID: UUID, mixPrediction: MixPrediction) {
@@ -497,7 +527,7 @@ final class StudioStore: ObservableObject {
         guard let path = result?.output else { return }
         let outputURL = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: outputURL.path) else {
-            errorMessage = "The validated output file could not be found."
+            present(message: "The validated output file could not be found.")
             return
         }
         if !NSWorkspace.shared.selectFile(outputURL.path, inFileViewerRootedAtPath: "") {
@@ -509,7 +539,7 @@ final class StudioStore: ObservableObject {
         guard let path = result?.output else { return }
         let outputURL = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: outputURL.path) else {
-            errorMessage = "The validated output file could not be found."
+            present(message: "The validated output file could not be found.")
             return
         }
         switch outputApplication {
@@ -520,14 +550,14 @@ final class StudioStore: ObservableObject {
             ) {
                 open(outputURL, with: applicationURL, named: "Bambu Studio")
             } else if !NSWorkspace.shared.open(outputURL) {
-                errorMessage = "Could not open the validated output in its default application."
+                present(message: "Could not open the validated output in its default application.")
             }
         case .orcaSlicer:
             guard let applicationURL = installedApplication(
                 bundleIdentifiers: ["com.softfever3d.orca-slicer", "com.orcaslicer.OrcaSlicer"],
                 applicationNames: ["OrcaSlicer.app", "Orca Slicer.app"]
             ) else {
-                errorMessage = "OrcaSlicer is not installed. The validated output is saved and can be opened manually after installing OrcaSlicer."
+                present(message: "OrcaSlicer is not installed. The validated output is saved and can be opened manually after installing OrcaSlicer.")
                 return
             }
             open(outputURL, with: applicationURL, named: "OrcaSlicer")
@@ -563,8 +593,73 @@ final class StudioStore: ObservableObject {
         NSWorkspace.shared.open([outputURL], withApplicationAt: applicationURL, configuration: configuration) { [weak self] _, error in
             guard let error else { return }
             Task { @MainActor in
-                self?.errorMessage = "Could not open the validated output in \(name): \(error.localizedDescription)"
+                self?.present(message: "Could not open the validated output in \(name): \(error.localizedDescription)")
             }
         }
+    }
+
+    func clearError() {
+        errorMessage = nil
+        errorReport = nil
+    }
+
+    func copyErrorReport() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(errorReport?.details ?? errorMessage ?? "", forType: .string)
+    }
+
+    func openErrorLog() {
+        guard let logURL = errorReport?.logURL else { return }
+        NSWorkspace.shared.open(logURL)
+    }
+
+    private func present(_ error: Error) {
+        let message = error.localizedDescription
+        errorMessage = message
+        if let converterError = error as? ConverterError,
+           let debugReport = converterError.debugReport {
+            errorReport = StudioErrorReport(message: message, details: debugReport, logURL: converterError.logURL)
+        } else {
+            errorReport = StudioErrorReport(message: message, details: message, logURL: nil)
+        }
+    }
+
+    private func present(message: String) {
+        errorMessage = message
+        errorReport = StudioErrorReport(message: message, details: message, logURL: nil)
+    }
+
+    private func recordProgress(_ value: Double, _ message: String) {
+        progress = value
+        progressMessage = message
+        lastProgressDate = Date()
+        lastEngineMessage = message
+    }
+
+    private func startActivityMonitor(label: String) {
+        lastProgressDate = Date()
+        lastEngineMessage = progressMessage
+        activityMonitorTask?.cancel()
+        activityMonitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self else { return }
+                let idleSeconds = Date().timeIntervalSince(self.lastProgressDate)
+                guard self.isWorking || self.isBuildingPreview else { return }
+                if idleSeconds >= 90 {
+                    self.status = "\(label) may be stuck. You can cancel and copy the debug report if it fails."
+                    self.progressMessage = "Possibly stuck at: \(self.lastEngineMessage)"
+                } else if idleSeconds >= 20 {
+                    self.progressMessage = "Still working: \(self.lastEngineMessage)"
+                }
+            }
+        }
+    }
+
+    private func stopActivityMonitorIfIdle() {
+        guard !isWorking && !isBuildingPreview else { return }
+        activityMonitorTask?.cancel()
+        activityMonitorTask = nil
     }
 }

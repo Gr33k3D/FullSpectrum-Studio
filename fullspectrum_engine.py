@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import traceback
 import zipfile
 import xml.etree.ElementTree as ET
 from array import array
@@ -93,12 +94,13 @@ MAX_REFERENCE_BYTES = 600 * 1024 * 1024
 MAX_IMPORT_FACES = 2_000_000
 MAX_INTERACTIVE_PREVIEW_TRIANGLES = 750_000
 OPTIMIZED_PREVIEW_GRID_RESOLUTION = 72
-OUTPUT_VERSION = "v0.4.7"
+OUTPUT_VERSION = "v0.4.8"
 DEFAULT_QUALITY_BIAS = 60
 MIX_MODELS = ("bambu",)
 HEX_DIGITS = "0123456789ABCDEF"
 PAINT_PATTERN = re.compile(r'paint_color="([^"]+)"')
 PAINT_BYTES_PATTERN = re.compile(br'paint_color="[^"]+"')
+PAINT_BYTES_VALUE_PATTERN = re.compile(br'(paint_color=)(["\'])([^"\']*)(\2)')
 XML_ATTRIBUTE_PATTERN = re.compile(r'([A-Za-z_:][\w:.-]*)="([^"]*)"')
 PROFILE_BY_FAMILY = {
     "PLA Basic": ("Bambu PLA Basic @BBL H2C 0.2 nozzle", "GFA00"),
@@ -246,8 +248,13 @@ def find_project_settings(names):
     return None
 
 def read_json_config(path):
-    obj,_=json.JSONDecoder().raw_decode(path.read_text(errors="replace").lstrip())
-    return obj
+    try:
+        obj,_=json.JSONDecoder().raw_decode(path.read_text(errors="replace").lstrip())
+        return obj
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Could not parse {path.name}: line {exc.lineno}, column {exc.colno}: {exc.msg}"
+        ) from exc
 
 def validated_archive_infos(archive):
     infos=archive.infolist()
@@ -290,7 +297,9 @@ def stream_digest(source, normalize_paint=False):
         block=source.readline() if normalize_paint else source.read(1024*1024)
         if not block:
             break
-        digest.update(PAINT_BYTES_PATTERN.sub(b'paint_color=""',block) if normalize_paint else block)
+        if normalize_paint:
+            block=PAINT_BYTES_VALUE_PATTERN.sub(lambda m: m.group(1)+m.group(2)+m.group(2),block)
+        digest.update(block)
     return digest.hexdigest()
 
 def preservation_snapshot(directory, settings_relative):
@@ -487,7 +496,15 @@ def catalog_palette(scope="core", inventory=None):
 def custom_palette(path):
     if not path:
         raise RuntimeError("Custom brands source requires a palette JSON file.")
-    payload=json.loads(Path(path).expanduser().read_text(errors="replace"))
+    palette_path=Path(path).expanduser()
+    try:
+        payload=json.loads(palette_path.read_text(errors="replace"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Custom palette file was not found: {palette_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Custom palette JSON could not be parsed at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+        ) from exc
     items=payload.get("filaments",payload) if isinstance(payload,dict) else payload
     if not isinstance(items,list):
         raise RuntimeError("Custom palette must contain a JSON list or a filaments list.")
@@ -1108,6 +1125,7 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_mod
 
 def collect_paint_codes(tmp):
     ordered=[]
+    seen=set()
     counts=Counter()
     for p in sorted((tmp/"3D"/"Objects").rglob("*.model")):
         if not p.is_file(): continue
@@ -1118,12 +1136,14 @@ def collect_paint_codes(tmp):
                 for m in PAINT_PATTERN.finditer(text):
                     code=m.group(1).upper()
                     counts[code]+=1
-                    if code not in ordered:
+                    if code not in seen:
                         ordered.append(code)
+                        seen.add(code)
     return ordered, counts
 
 def collect_archive_paint_codes(archive):
     ordered=[]
+    seen=set()
     counts=Counter()
     model_names=sorted(n for n in archive.namelist()
                        if n.lower().startswith("3d/objects/") and n.lower().endswith(".model"))
@@ -1134,8 +1154,9 @@ def collect_archive_paint_codes(archive):
                 for m in PAINT_PATTERN.finditer(text):
                     code=m.group(1).upper()
                     counts[code]+=1
-                    if code not in ordered:
+                    if code not in seen:
                         ordered.append(code)
+                        seen.add(code)
     return ordered, counts
 
 def encode_paint_state(slot):
@@ -1695,20 +1716,20 @@ def remap_paint_codes_by_codec(tmp, old_slot_to_new_slot, oldn, newn):
         replacement=p.with_suffix(".model.patched")
         changed=False
         try:
-            with p.open("r",errors="replace") as source, replacement.open("w") as output:
+            with p.open("rb") as source, replacement.open("wb") as output:
                 for text in source:
                     def repl(m):
                         nonlocal changed
-                        code=m.group(1).upper()
+                        code=m.group(3).decode("ascii",errors="replace").upper()
                         if code not in cache:
                             cache[code], _=remap_paint_code(code, old_slot_to_new_slot, oldn, newn)
-                        mapped=f'paint_color="{cache[code]}"'
+                        mapped=m.group(1)+m.group(2)+cache[code].encode("ascii")+m.group(2)
                         changed=changed or mapped != m.group(0)
                         return mapped
-                    output.write(PAINT_PATTERN.sub(repl,text))
+                    output.write(PAINT_BYTES_VALUE_PATTERN.sub(repl,text))
             if changed:
                 replacement.replace(p)
-                patched.append(str(p.relative_to(tmp)))
+                patched.append(p.relative_to(tmp).as_posix())
             else:
                 replacement.unlink()
         except Exception:
@@ -2040,6 +2061,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         else:
             progress(0.12,f"Using {len(catalog_palette('all' if palette_source=='all-bambu' else 'core',inventory))} Bambu Lab planning colors")
             warnings.append("Catalog colors are planning choices; confirm current regional availability before buying filament.")
+        progress(0.14,"Extracting and scanning source 3MF archive")
         with zipfile.ZipFile(project_file) as z:
             names=z.namelist()
             safe_extract_archive(z,tmp)
@@ -2049,8 +2071,10 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         obj=read_json_config(pspath)
         old=colors_from_project(obj); oldn=len(old)
         if not old: raise RuntimeError("No filament_colour array found")
+        progress(0.17,"Fingerprinting source geometry and paint data")
         preservation=preservation_snapshot(tmp,psrel)
         reference_result=analyze_reference(reference,reference_tmp) if reference else None
+        progress(0.19,"Collecting existing Bambu paint states")
         ordered_codes, code_counts=collect_paint_codes(tmp)
         usage=paint_slot_usage(code_counts, oldn)
         layouts=filament_array_layouts(obj,oldn)
@@ -2418,10 +2442,9 @@ def main():
             print(json.dumps(result,indent=2))
         return 0
     except Exception as e:
-        print("ERROR:",e,file=sys.stderr)
-        if os.environ.get("FULLSPECTRUM_DEBUG") == "1":
-            import traceback
-            traceback.print_exc(file=sys.stderr)
+        message=str(e).strip() or e.__class__.__name__
+        print(f"ERROR: {e.__class__.__name__}: {message}",file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 1
 
 if __name__=="__main__":

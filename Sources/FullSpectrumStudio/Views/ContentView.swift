@@ -63,13 +63,20 @@ struct ContentView: View {
         .onOpenURL { url in
             store.accept(url: url)
         }
+        .preferredColorScheme(.dark)
         .alert("FullSpectrum Studio", isPresented: Binding(
             get: { store.errorMessage != nil },
-            set: { if !$0 { store.errorMessage = nil } }
+            set: { if !$0 { store.clearError() } }
         )) {
-            Button("OK", role: .cancel) { store.errorMessage = nil }
+            if store.errorReport != nil {
+                Button("Copy Error Report") { store.copyErrorReport() }
+            }
+            if store.errorReport?.logURL != nil {
+                Button("Open Debug Log") { store.openErrorLog() }
+            }
+            Button("OK", role: .cancel) { store.clearError() }
         } message: {
-            Text(store.errorMessage ?? "")
+            Text(store.errorReport?.message ?? store.errorMessage ?? "")
         }
     }
 
@@ -92,6 +99,7 @@ private struct ActivityPanel: View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 7) {
                 Text(store.progressMessage)
+                    .textSelection(.enabled)
                 if let notice = store.inspection?.previewNotice {
                     Text(notice)
                 }
@@ -108,7 +116,8 @@ private struct ActivityPanel: View {
                 Label("Activity and Validation Log", systemImage: "text.badge.checkmark")
                 Spacer()
                 Text(store.status)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.trailing)
                     .foregroundStyle(.white.opacity(0.48))
             }
             .font(.caption.weight(.semibold))
@@ -186,6 +195,20 @@ private struct HeaderView: View {
                 tint: store.result == nil ? .cyan : .green
             )
 
+            if store.isWorking || store.isBuildingPreview {
+                Button {
+                    store.cancelActiveOperation()
+                } label: {
+                    if compact {
+                        Image(systemName: "xmark.circle.fill")
+                    } else {
+                        Label(store.isWorking ? "Cancel" : "Stop Preview", systemImage: "xmark.circle.fill")
+                    }
+                }
+                .buttonStyle(StudioButtonStyle(prominent: false, tint: .red))
+                .help(store.isWorking ? "Terminate the active Python conversion process" : "Stop the optional preview build")
+            }
+
             Button {
                 store.chooseSourceFile()
             } label: {
@@ -245,24 +268,25 @@ private struct StatusPill: View {
 
 struct StudioButtonStyle: ButtonStyle {
     var prominent = false
+    var tint: Color = .cyan
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.callout.weight(.semibold))
-            .foregroundStyle(.white.opacity(configuration.isPressed ? 0.75 : 0.96))
+            .foregroundStyle(.white.opacity(configuration.isPressed ? 0.82 : 1.0))
             .padding(.horizontal, 17)
             .padding(.vertical, 10)
             .background {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .fill(
                         prominent
-                        ? AnyShapeStyle(LinearGradient(colors: [.cyan.opacity(0.86), .blue.opacity(0.76)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                        : AnyShapeStyle(.white.opacity(configuration.isPressed ? 0.05 : 0.08))
+                        ? AnyShapeStyle(LinearGradient(colors: [tint.opacity(0.92), .blue.opacity(0.78)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        : AnyShapeStyle(Color.white.opacity(configuration.isPressed ? 0.12 : 0.10))
                     )
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(.white.opacity(prominent ? 0.08 : 0.1), lineWidth: 1)
+                    .stroke((prominent ? Color.white : tint).opacity(prominent ? 0.12 : 0.28), lineWidth: 1)
             }
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
     }

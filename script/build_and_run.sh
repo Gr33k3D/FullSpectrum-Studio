@@ -6,8 +6,8 @@ APP_NAME="FullSpectrum Studio"
 EXECUTABLE_NAME="FullSpectrumStudio"
 BUNDLE_ID="studio.fullspectrum.macos"
 MIN_SYSTEM_VERSION="14.0"
-APP_VERSION="${FULLSPECTRUM_VERSION:-0.4.7}"
-APP_BUILD="${FULLSPECTRUM_BUILD:-9}"
+APP_VERSION="${FULLSPECTRUM_VERSION:-0.4.8}"
+APP_BUILD="${FULLSPECTRUM_BUILD:-10}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -92,8 +92,25 @@ open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
 }
 
+strict_verify_bundle() {
+  local verified=0
+  for _ in 1 2 3; do
+    /usr/bin/xattr -cr "$APP_BUNDLE"
+    if /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"; then
+      verified=1
+      break
+    fi
+    sleep 1
+  done
+  if [[ "$verified" != "1" ]]; then
+    exit 1
+  fi
+}
+
 case "$MODE" in
   build|--build)
+    sleep 1
+    strict_verify_bundle
     echo "$APP_NAME built at $APP_BUNDLE."
     ;;
   run)
@@ -114,6 +131,10 @@ case "$MODE" in
     open_app
     sleep 1
     pgrep -x "$EXECUTABLE_NAME" >/dev/null
+    # Launch Services can attach Finder metadata to the local bundle during a
+    # verification launch. Remove it so a post-run strict codesign check still
+    # reflects the distributable bundle state.
+    strict_verify_bundle
     echo "$APP_NAME launched successfully."
     ;;
   *)

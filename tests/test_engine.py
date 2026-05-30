@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import subprocess
 import struct
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -222,7 +224,61 @@ class ArchiveSafetyTests(unittest.TestCase):
                 ENGINE.import_glb_project(oversized,folder/"out.3mf",folder)
 
 
+class ErrorReportingTests(unittest.TestCase):
+    def test_custom_palette_json_errors_include_line_and_column(self):
+        with tempfile.TemporaryDirectory() as folder:
+            palette = Path(folder) / "bad.json"
+            palette.write_text("{ bad")
+            with self.assertRaisesRegex(RuntimeError, "line 1, column 3"):
+                ENGINE.custom_palette(palette)
+
+    def test_cli_error_includes_traceback_not_none(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bad = Path(folder) / "bad.3mf"
+            bad.write_text("not a zip")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "fullspectrum_engine.py"),
+                    "--json",
+                    "--inspect",
+                    str(bad),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("ERROR:", completed.stderr)
+            self.assertIn("Traceback", completed.stderr)
+            self.assertNotEqual(completed.stderr.strip().lower(), "none")
+
+
 class ConversionTests(unittest.TestCase):
+    def test_binary_paint_remap_preserves_nonpaint_model_bytes(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            objects = folder / "3D" / "Objects"
+            objects.mkdir(parents=True)
+            source = (
+                b'<?xml version="1.0" encoding="UTF-8"?>\r\n'
+                b'<model><resources><object id="1"><mesh>\r\n'
+                b'<vertices><vertex x="0" y="0" z="0"/></vertices>\r\n'
+                b'<triangles><triangle v1="0" v2="0" v3="0" paint_color="8"/></triangles>\r\n'
+                b'</mesh></object></resources></model>\r\n'
+            )
+            model = objects / "object_1.model"
+            model.write_bytes(source)
+            mapped, _ = ENGINE.remap_paint_code("8", {2: 1}, 4, 2)
+
+            patched = ENGINE.remap_paint_codes_by_codec(folder, {2: 1}, 4, 2)
+
+            self.assertEqual(patched, ["3D/Objects/object_1.model"])
+            self.assertEqual(
+                model.read_bytes(),
+                source.replace(b'paint_color="8"', f'paint_color="{mapped}"'.encode()),
+            )
+
     def test_dynamic_physical_slots_and_preservation_validation(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.3mf"
