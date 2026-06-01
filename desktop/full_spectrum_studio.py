@@ -39,6 +39,7 @@ class StudioApp(tk.Tk):
         self.texture = tk.StringVar()
         self.custom = tk.StringVar()
         self.strategy = tk.StringVar(value="official")
+        self.planner_mode = tk.StringVar(value="best")
         self.source = tk.StringVar(value="inventory")
         self.catalog_region = tk.StringVar(value="global")
         self.real_slots = tk.StringVar(value="auto")
@@ -91,10 +92,11 @@ class StudioApp(tk.Tk):
 
         choices = ttk.Frame(frame)
         choices.pack(fill="x", pady=22)
-        self.combo(choices, "Strategy", self.strategy, ["official", "cmykw"], 0)
-        self.combo(choices, "Filaments", self.source, ["inventory", "catalog", "all-bambu", "custom", "exact-cmykw"], 1)
-        self.combo(choices, "Physical slots", self.real_slots, ["auto", "2", "3", "4", "5", "6"], 2)
-        self.combo(choices, "Catalog region", self.catalog_region, ["global", "eu", "us-ca", "uk", "au-nz", "asia"], 3)
+        self.combo(choices, "Strategy", self.strategy, ["official", "cmykw"], 0, 0)
+        self.combo(choices, "Planner", self.planner_mode, ["best", "fast"], 1, 0)
+        self.combo(choices, "Filaments", self.source, ["inventory", "catalog", "all-bambu", "custom", "exact-cmykw"], 2, 0)
+        self.combo(choices, "Physical slots", self.real_slots, ["auto", "2", "3", "4", "5", "6", "7", "8"], 0, 1)
+        self.combo(choices, "Catalog region", self.catalog_region, ["global", "eu", "us-ca", "uk", "au-nz", "asia"], 1, 1)
         ttk.Label(
             frame,
             text="Catalog region is planning metadata only; FullSpectrum does not check live Bambu store stock.",
@@ -117,7 +119,7 @@ class StudioApp(tk.Tk):
             bg="#101721", fg="#d7e5ed", highlightthickness=0, troughcolor="#182331",
             length=320
         ).pack(side="left", padx=12)
-        ttk.Label(slider, text="Auto tests practical/detail plans; manual slider remains available.", style="Small.TLabel").pack(side="left")
+        ttk.Label(slider, text="Best planner searches dense 2/3-color mixes; Fast keeps the quicker planner. 7/8 slots are experimental.", style="Small.TLabel").pack(side="left")
 
         ttk.Progressbar(frame, variable=self.progress, maximum=100).pack(fill="x", pady=(8, 10))
         ttk.Label(frame, textvariable=self.status, style="Small.TLabel").pack(anchor="w")
@@ -134,9 +136,9 @@ class StudioApp(tk.Tk):
         self.output = tk.Text(frame, height=14, bg="#121c28", fg="#d7e5ed", insertbackground="white", relief="flat", padx=12, pady=12)
         self.output.pack(fill="both", expand=True)
 
-    def combo(self, parent, title, variable, values, column):
-        ttk.Label(parent, text=title).grid(row=0, column=column, sticky="w", padx=(0, 20))
-        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=18).grid(row=1, column=column, sticky="w", padx=(0, 20), pady=4)
+    def combo(self, parent, title, variable, values, column, row=0):
+        ttk.Label(parent, text=title).grid(row=row * 2, column=column, sticky="w", padx=(0, 20), pady=(0, 2))
+        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=18).grid(row=row * 2 + 1, column=column, sticky="w", padx=(0, 20), pady=(0, 8))
 
     def choose_project(self):
         path = filedialog.askopenfilename(filetypes=[("FullSpectrum sources", "*.3mf *.obj *.glb"), ("Bambu 3MF", "*.3mf"), ("Textured model", "*.obj *.glb")])
@@ -184,6 +186,7 @@ class StudioApp(tk.Tk):
             "strategy": self.strategy.get(),
             "source": self.source.get(),
             "catalog_region": self.catalog_region.get(),
+            "planner_mode": self.planner_mode.get(),
             "real_slots": self.real_slots.get(),
             "quality_bias": "auto" if self.smart_quality.get() else self.quality_bias.get(),
             "mix_model": self.mix_model.get(),
@@ -215,6 +218,7 @@ class StudioApp(tk.Tk):
                 texture_override=options["texture"],
                 quality_bias=options["quality_bias"],
                 catalog_region=options["catalog_region"],
+                planner_mode=options["planner_mode"],
                 mix_model=options["mix_model"],
                 progress=report,
             )
@@ -222,6 +226,7 @@ class StudioApp(tk.Tk):
                 f"Validated output: {result['output']}",
                 f"Physical slots: {result['realSlots']}   Mixed slots: {result['outputSlots'] - result['realSlots']}",
                 f"Quality/waste: {result.get('qualityBiasMode', 'manual')} {result.get('qualityBias', options['quality_bias'])}",
+                f"Planner: {result.get('plannerMode', options['planner_mode'])}",
                 f"Catalog planning region: {result.get('catalogRegionLabel', options['catalog_region'])}",
                 f"Quality: {result['quality']['qualityScore']:.1f} / 100   Mean dE: {result['quality']['estimatedDeltaE']:.2f}",
                 f"Confidence: {result['quality']['confidenceScore']:.1f} / 100   Contrast: {result['quality'].get('contrastRetention', 0):.1f}%",

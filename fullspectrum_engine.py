@@ -7,11 +7,13 @@ It is never inferred from first-use ordering or a guessed paint code formula.
 """
 
 import argparse
+import colorsys
 import csv
 import hashlib
 import json
 import math
 import os
+import plistlib
 import re
 import shutil
 import struct
@@ -72,11 +74,26 @@ CMYK_TARGETS = [
     ("White", "#FFFFFF"),
     ("Warm White", "#F5F0E8"),
 ]
-# Layer-mixed colors must translate into repeatable cadence patterns. These
-# ratios are intentionally small rational schedules rather than arbitrary
-# five-percent steps that suggest precision the uncalibrated model cannot offer.
+# Bambu mixed filament slots are layer/sublayer halftones, not liquid blends:
+# the saved slot references physical component filaments and a short cadence of
+# ratios, then the viewer and human eye perceive those alternating layers as a
+# new color. Keep this search discrete. Arbitrary ratios such as 30:70 imply
+# longer cadence patterns and can suggest physical precision the uncalibrated
+# model does not have. Fast uses short practical schedules; Best/high-fidelity
+# adds denser but still bounded schedules and validates against Bambu's loaded
+# FilamentMixer reconstruction.
 R2 = [(0.25,0.75), (1/3,2/3), (0.5,0.5), (2/3,1/3), (0.75,0.25)]
 R3 = [(.6,.2,.2),(.2,.6,.2),(.2,.2,.6),(.5,.3,.2),(.5,.2,.3),(.3,.5,.2),(.2,.5,.3),(.3,.2,.5),(.2,.3,.5),(.4,.4,.2),(.4,.2,.4),(.2,.4,.4),(1/3,1/3,1/3)]
+R2_FINE = sorted(set(R2 + [(1/6,5/6), (0.2,0.8), (0.4,0.6), (0.6,0.4), (0.8,0.2), (5/6,1/6)]))
+R3_FINE = sorted(set(
+    R3 + [
+        (a/denom, b/denom, (denom-a-b)/denom)
+        for denom in (4, 5, 6)
+        for a in range(1, denom-1)
+        for b in range(1, denom-a)
+        if denom-a-b > 0
+    ]
+))
 
 MIN_ANCHOR_DE = 7.0
 DIRECT_ANCHOR_DE = 4.5
@@ -87,18 +104,30 @@ CMYKW_ROLE_WARNING_DE = 10.0
 MAX_BAMBU_PAINT_SLOT = 32
 PREVIEW_GRID_RESOLUTION = 72
 MIN_REAL_SLOTS = 2
-MAX_REAL_SLOTS = 6
+DEFAULT_AUTO_MAX_REAL_SLOTS = 6
+MAX_REAL_SLOTS = 8
 MAX_ARCHIVE_ENTRIES = 20000
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 MAX_REFERENCE_BYTES = 600 * 1024 * 1024
 MAX_IMPORT_FACES = 2_000_000
 MAX_INTERACTIVE_PREVIEW_TRIANGLES = 750_000
 OPTIMIZED_PREVIEW_GRID_RESOLUTION = 72
-OUTPUT_VERSION = "v0.4.9"
+OUTPUT_VERSION = "v0.4.12-macos"
 DEFAULT_QUALITY_BIAS = 60
-SMART_QUALITY_CANDIDATES = (35, 60, 80, 100)
+SMART_QUALITY_CANDIDATES = (35, 50, 70, 85, 100)
+SMART_QUALITY_PROBE = 70
 ANCHOR_BEAM_WIDTH = 8
 ANCHOR_POOL_LIMIT = 64
+HIGH_FIDELITY_QUALITY = 90
+HIGH_FIDELITY_ANCHOR_BEAM_WIDTH = 12
+HIGH_FIDELITY_ANCHOR_POOL_LIMIT = 96
+MIX_CACHE_SIZE = 262_144
+DIST_CACHE_SIZE = 524_288
+MIX_RECIPE_INDEX_CACHE_SIZE = 4096
+ANCHOR_SCORE_HINT_CACHE_SIZE = 16
+ANCHOR_SCORE_HINTS_PER_TARGET = 480
+ANCHOR_SCORE_TRIPLE_NEIGHBORS = 30
+LOCAL_OPTIMIZE_CANDIDATE_LIMIT = 10
 CATALOG_REGIONS = {
     "global": "Global planning",
     "eu": "Europe",
@@ -108,22 +137,68 @@ CATALOG_REGIONS = {
     "asia": "Asia",
 }
 MIX_MODELS = ("bambu",)
+PLANNER_MODES = ("best", "fast")
+PLANNING_SAMPLES = ("paint", "preview")
+PREVIEW_USAGE_BLEND = 0.88
 HEX_DIGITS = "0123456789ABCDEF"
 PAINT_PATTERN = re.compile(r'paint_color="([^"]+)"')
 PAINT_BYTES_PATTERN = re.compile(br'paint_color="[^"]+"')
 PAINT_BYTES_VALUE_PATTERN = re.compile(br'(paint_color=)(["\'])([^"\']*)(\2)')
 XML_ATTRIBUTE_PATTERN = re.compile(r'([A-Za-z_:][\w:.-]*)="([^"]*)"')
+VERTEX_TAG_PATTERN = re.compile(r'<(?:[A-Za-z_][\w:.-]*:)?vertex\b[^>]*>')
+TRIANGLE_TAG_PATTERN = re.compile(r'<(?:[A-Za-z_][\w:.-]*:)?triangle\b[^>]*>')
 PROFILE_BY_FAMILY = {
     "PLA Basic": ("Bambu PLA Basic @BBL H2C 0.2 nozzle", "GFA00"),
     "PLA Matte": ("Bambu PLA Matte @BBL H2C 0.2 nozzle", "GFA01"),
+    "PLA Silk": ("Bambu PLA Silk @BBL H2C 0.2 nozzle", "GFA05"),
     "PLA Silk+": ("Bambu PLA Silk+ @BBL H2C 0.2 nozzle", "GFA06"),
+    "PLA Marble": ("Bambu PLA Marble @BBL H2C", "GFA07"),
+    "PLA Sparkle": ("Bambu PLA Sparkle @BBL X1C", "GFA08"),
+    "PLA Tough": ("Bambu PLA Tough @BBL H2S", "GFA09"),
+    "PLA Tough+": ("Bambu PLA Tough+ @BBL H2D 0.6 nozzle", "GFA10"),
+    "PLA Aero": ("Bambu PLA Aero @BBL H2S", "GFA11"),
+    "PLA Glow": ("Bambu PLA Glow @base", "GFA12"),
+    "PLA Dynamic": ("Bambu PLA Dynamic @BBL H2C 0.2 nozzle", "GFA13"),
+    "PLA Galaxy": ("Bambu PLA Galaxy @BBL X2D 0.4 nozzle", "GFA15"),
+    "PLA Wood": ("Bambu PLA Wood @base", "GFA16"),
+    "PLA Translucent": ("Bambu PLA Translucent @BBL H2D 0.2 nozzle", "GFA17"),
+    "PLA Lite": ("Bambu PLA Lite @BBL H2DP 0.2 nozzle", "GFA18"),
+    "PLA Pure": ("Bambu PLA Pure @BBL P1P 0.2 nozzle", "GFA19"),
+    "PLA-CF": ("Bambu PLA-CF @BBL X1C 0.8 nozzle", "GFA50"),
+    "PLA Metal": ("Bambu PLA Metal @BBL X1C 0.2 nozzle", "GFA02"),
 }
 MIXED_PROFILE_ID, MIXED_FILAMENT_ID = PROFILE_BY_FAMILY["PLA Basic"]
+BAMBU_STUDIO_CATALOG_LOCATIONS = [
+    Path("/Applications/BambuStudio.app/Contents/Resources/profiles/BBL/filament/filaments_color_codes.json"),
+    Path.home()/"Library"/"Application Support"/"BambuStudio"/"system"/"BBL"/"filament"/"filaments_color_codes.json",
+    Path.home()/"Library"/"Application Support"/"BambuStudioBeta"/"system"/"BBL"/"filament"/"filaments_color_codes.json",
+    Path.home()/"Library"/"Application Support"/"Bambu Suite"/"system"/"BBL"/"filament"/"filaments_color_codes.json",
+    Path.home()/"Library"/"Application Support"/"OrcaSlicer"/"system"/"BBL"/"filament"/"filaments_color_codes.json",
+]
+BAMBU_STUDIO_APP_LOCATIONS = [
+    Path("/Applications/BambuStudio.app"),
+    Path("/Applications/Bambu Studio.app"),
+    Path.home()/"Applications"/"BambuStudio.app",
+    Path.home()/"Applications"/"Bambu Studio.app",
+]
 BAMBU_INVENTORY_LOCATIONS = [
     ("Bambu Studio Beta", Path.home()/"Library"/"Application Support"/"BambuStudioBeta"/"filament_inventory"/"spools.json"),
     ("Bambu Studio", Path.home()/"Library"/"Application Support"/"BambuStudio"/"filament_inventory"/"spools.json"),
 ]
 if os.name == "nt" and os.environ.get("APPDATA"):
+    BAMBU_STUDIO_CATALOG_LOCATIONS = [
+        Path(os.environ.get("ProgramFiles",""))/"Bambu Studio"/"resources"/"profiles"/"BBL"/"filament"/"filaments_color_codes.json",
+        Path(os.environ.get("ProgramFiles",""))/"BambuStudio"/"resources"/"profiles"/"BBL"/"filament"/"filaments_color_codes.json",
+        Path(os.environ["APPDATA"])/"BambuStudio"/"system"/"BBL"/"filament"/"filaments_color_codes.json",
+        Path(os.environ["APPDATA"])/"BambuStudioBeta"/"system"/"BBL"/"filament"/"filaments_color_codes.json",
+        Path(os.environ["APPDATA"])/"OrcaSlicer"/"system"/"BBL"/"filament"/"filaments_color_codes.json",
+    ]
+    BAMBU_STUDIO_APP_LOCATIONS = [
+        Path(os.environ.get("ProgramFiles",""))/"Bambu Studio",
+        Path(os.environ.get("ProgramFiles",""))/"BambuStudio",
+        Path(os.environ.get("ProgramFiles(x86)",""))/"Bambu Studio",
+        Path(os.environ.get("ProgramFiles(x86)",""))/"BambuStudio",
+    ]
     BAMBU_INVENTORY_LOCATIONS = [
         ("Bambu Studio Beta", Path(os.environ["APPDATA"])/"BambuStudioBeta"/"filament_inventory"/"spools.json"),
         ("Bambu Studio", Path(os.environ["APPDATA"])/"BambuStudio"/"filament_inventory"/"spools.json"),
@@ -144,6 +219,47 @@ def quality_mix_limit(quality_bias):
         return MAX_RELIABLE_MIX_DE
     span=100-DEFAULT_QUALITY_BIAS
     return MAX_RELIABLE_MIX_DE + (MAX_HIGH_QUALITY_MIX_DE-MAX_RELIABLE_MIX_DE) * ((quality_bias-DEFAULT_QUALITY_BIAS)/span)
+
+def normalize_planner_mode(planner_mode):
+    value=str(planner_mode or "best").strip().lower()
+    if value not in PLANNER_MODES:
+        raise RuntimeError(f"Unknown planner mode {planner_mode!r}. Choose best or fast.")
+    return value
+
+def normalize_planning_sample(planning_sample):
+    value=str(planning_sample or "paint").strip().lower()
+    aliases={
+        "paint-states":"paint",
+        "paint_states":"paint",
+        "source":"paint",
+        "render":"preview",
+        "preview-mesh":"preview",
+        "preview_mesh":"preview",
+    }
+    value=aliases.get(value,value)
+    if value not in PLANNING_SAMPLES:
+        raise RuntimeError(f"Unknown planning sample {planning_sample!r}. Choose paint or preview.")
+    return value
+
+def planner_is_best(planner_mode):
+    return normalize_planner_mode(planner_mode) == "best"
+
+def high_fidelity_quality(quality_bias, planner_mode="best"):
+    return planner_is_best(planner_mode) and clamp_quality_bias(quality_bias) >= HIGH_FIDELITY_QUALITY
+
+def anchor_pool_limit_for_quality(quality_bias, planner_mode="best"):
+    return HIGH_FIDELITY_ANCHOR_POOL_LIMIT if high_fidelity_quality(quality_bias, planner_mode) else ANCHOR_POOL_LIMIT
+
+def anchor_beam_width_for_quality(quality_bias, planner_mode="best"):
+    return HIGH_FIDELITY_ANCHOR_BEAM_WIDTH if high_fidelity_quality(quality_bias, planner_mode) else ANCHOR_BEAM_WIDTH
+
+def maximum_requested_slots_for_mode(mode):
+    return min(MAX_REAL_SLOTS, len(CMYK_TARGETS)) if mode=="cmykw" else MAX_REAL_SLOTS
+
+def automatic_slot_counts_for_mode(mode):
+    upper=min(DEFAULT_AUTO_MAX_REAL_SLOTS, maximum_requested_slots_for_mode(mode))
+    minimum=4 if mode=="cmykw" else MIN_REAL_SLOTS
+    return list(range(minimum, upper+1))
 
 def catalog_region_label(region):
     key=str(region or "global").strip().lower()
@@ -228,8 +344,16 @@ def delta_e_2000(lab1, lab2):
         math.radians(60*math.exp(-((hp-275)/25)**2))
     ) if cp else 0
     return math.sqrt((dL/sl)**2+(dC/sc)**2+(dH/sh)**2+rt*(dC/sc)*(dH/sh))
+@lru_cache(maxsize=65536)
+def lab_for_hex(color):
+    return rgb_to_lab(*rgb(color))
+
+@lru_cache(maxsize=DIST_CACHE_SIZE)
+def cached_dist(a,b):
+    return delta_e_2000(lab_for_hex(a), lab_for_hex(b))
+
 def dist(a,b):
-    return delta_e_2000(rgb_to_lab(*rgb(a)), rgb_to_lab(*rgb(b)))
+    return cached_dist(hx(a), hx(b))
 def luminance(h):
     r,g,b=rgb(h); return .2126*r+.7152*g+.0722*b
 def serialized_ratio_text(ratios):
@@ -248,7 +372,7 @@ def bambu_ratio_weights(ratios):
         output.append(int(rounded))
     return output
 
-@lru_cache(maxsize=8192)
+@lru_cache(maxsize=MIX_CACHE_SIZE)
 def cached_bambu_mix(hexes, weights):
     return bambu_blend_color_multi(hexes,weights)
 
@@ -256,6 +380,92 @@ def mix(hexes, ratios, model="bambu"):
     """Return the exact swatch Bambu Studio reconstructs for a mixed recipe."""
     weights=tuple(bambu_ratio_weights(ratios))
     return cached_bambu_mix(tuple(hx(color) for color in hexes),weights)
+
+def normalized_ratios(ratios):
+    return tuple(round(float(value),4) for value in ratios)
+
+def ratio_family(name):
+    if name=="none":
+        return ()
+    if name=="half2":
+        return ((0.5,0.5),)
+    if name=="standard2":
+        return tuple(normalized_ratios(ratio) for ratio in R2)
+    if name=="fine2":
+        return tuple(normalized_ratios(ratio) for ratio in R2_FINE)
+    if name=="standard3":
+        return tuple(normalized_ratios(ratio) for ratio in R3)
+    if name=="fine3":
+        return tuple(normalized_ratios(ratio) for ratio in R3_FINE)
+    raise RuntimeError(f"Unknown mix ratio family: {name}")
+
+def score_pair_family(quality_bias, planner_mode):
+    return "standard2" if high_fidelity_quality(quality_bias,planner_mode) else "half2"
+
+def score_triple_family(quality_bias, planner_mode):
+    return "none"
+
+@lru_cache(maxsize=MIX_RECIPE_INDEX_CACHE_SIZE)
+def mix_recipe_index_for_signature(signature, mix_model="bambu",
+                                   pair_family="standard2", triple_family="none"):
+    colors=tuple(hx(color) for color in signature)
+    recipes=[]
+    for i,j in combinations(range(len(colors)),2):
+        component_colors=(colors[i],colors[j])
+        for ratios in ratio_family(pair_family):
+            recipes.append(((i+1,j+1),ratios,mix(component_colors,ratios,mix_model)))
+    if triple_family!="none" and len(colors)>=3:
+        for combo in combinations(range(len(colors)),3):
+            component_colors=(colors[combo[0]],colors[combo[1]],colors[combo[2]])
+            component_slots=(combo[0]+1,combo[1]+1,combo[2]+1)
+            for ratios in ratio_family(triple_family):
+                recipes.append((component_slots,ratios,mix(component_colors,ratios,mix_model)))
+    return tuple(recipes)
+
+def mix_recipe_index(anchors, mix_model="bambu", pair_family="standard2", triple_family="none"):
+    return mix_recipe_index_for_signature(anchor_signature(anchors),mix_model,pair_family,triple_family)
+
+# Target-aware in-memory recipe database for anchor search. The output 3MF can
+# hold up to 32 paint slots, but the hard part is choosing the physical anchors:
+# thousands of trial anchor sets would otherwise recompute the same Bambu
+# pair/triple halftone recipes for every source color. This cache builds the
+# reusable candidate mix errors once for the active Bambu pool and lets the
+# beam search test anchor sets with cheap set-membership checks.
+@lru_cache(maxsize=ANCHOR_SCORE_HINT_CACHE_SIZE)
+def anchor_score_hint_database(pool_signature, target_signature, mix_model,
+                               pair_family, triple_family, mix_limit):
+    pool_colors=tuple(hx(color) for color in pool_signature)
+    target_colors=tuple(hx(color) for color in target_signature)
+    mix_limit=float(mix_limit)
+    pair_ratios=ratio_family(pair_family)
+    triple_ratios=ratio_family(triple_family)
+    hints_by_target=[]
+    for target in target_colors:
+        hints=[]
+        for i,j in combinations(range(len(pool_colors)),2):
+            component_colors=(pool_colors[i],pool_colors[j])
+            best_error=min(
+                dist(target,mix(component_colors,ratios,mix_model))
+                for ratios in pair_ratios
+            )
+            if best_error<=mix_limit:
+                hints.append(((pool_colors[i],pool_colors[j]),best_error))
+        if triple_ratios and len(pool_colors)>=3:
+            nearby=sorted(
+                range(len(pool_colors)),
+                key=lambda index:dist(target,pool_colors[index])
+            )[:min(ANCHOR_SCORE_TRIPLE_NEIGHBORS,len(pool_colors))]
+            for combo in combinations(nearby,3):
+                component_colors=(pool_colors[combo[0]],pool_colors[combo[1]],pool_colors[combo[2]])
+                best_error=min(
+                    dist(target,mix(component_colors,ratios,mix_model))
+                    for ratios in triple_ratios
+                )
+                if best_error<=mix_limit:
+                    hints.append((component_colors,best_error))
+        hints.sort(key=lambda item:item[1])
+        hints_by_target.append(tuple(hints[:ANCHOR_SCORE_HINTS_PER_TARGET]))
+    return tuple(hints_by_target)
 
 def choose_file():
     try:
@@ -385,43 +595,116 @@ def preview_colors_from_project(obj, mix_model="bambu"):
     return colors
 
 def profile_for_anchor(name):
-    for family, values in PROFILE_BY_FAMILY.items():
+    families=sorted(PROFILE_BY_FAMILY,key=len,reverse=True)
+    for family in families:
         if name.startswith(family):
-            return values
+            return PROFILE_BY_FAMILY[family]
     return PROFILE_BY_FAMILY["PLA Basic"]
 
 def filament_family(name):
-    return next((family for family in PROFILE_BY_FAMILY if name == family or name.startswith(f"{family} ")), "PLA Basic")
+    families=sorted(PROFILE_BY_FAMILY,key=len,reverse=True)
+    return next((family for family in families if name == family or name.startswith(f"{family} ")), "PLA Basic")
+
+def supported_catalog_family(series, scope):
+    series=str(series or "").strip()
+    if not (series == "PLA-CF" or series.startswith("PLA ")):
+        return False
+    if series.startswith("PLA Support") or series in {"PLA Support", "PLA PVA"}:
+        return False
+    core={"PLA Basic","PLA Matte","PLA Silk+"}
+    return series in core if scope=="core" else series in PROFILE_BY_FAMILY
+
+def bambu_catalog_color_name(row):
+    names=row.get("fila_color_name") if isinstance(row,dict) else None
+    if isinstance(names,dict):
+        return str(names.get("en") or next((value for value in names.values() if value), "")).strip()
+    return str(names or "").strip()
+
+def bambu_catalog_hexes(row):
+    colors=row.get("fila_color") if isinstance(row,dict) else None
+    if not isinstance(colors,list):
+        return []
+    return [hx(color) for color in colors if re.match(r"^#[0-9A-Fa-f]{6}", hx(color))]
+
+@lru_cache(maxsize=1)
+def bambu_studio_catalog_rows():
+    for path in BAMBU_STUDIO_CATALOG_LOCATIONS:
+        if not path or not path.exists():
+            continue
+        try:
+            payload=json.loads(path.read_text(errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        rows=payload.get("data",payload if isinstance(payload,list) else [])
+        if isinstance(rows,list) and rows:
+            return str(path), rows
+    return None, []
+
+@lru_cache(maxsize=1)
+def installed_bambu_studio_version():
+    for app in BAMBU_STUDIO_APP_LOCATIONS:
+        plist_path=app/"Contents"/"Info.plist"
+        if not plist_path.exists():
+            continue
+        try:
+            with plist_path.open("rb") as handle:
+                payload=plistlib.load(handle)
+            version=str(payload.get("CFBundleShortVersionString") or "").strip()
+            build=str(payload.get("CFBundleVersion") or "").strip()
+            if version or build:
+                return {"version":version or None,"build":build or None,"path":str(app)}
+        except (OSError, plistlib.InvalidFileException, ValueError):
+            continue
+    return {"version":None,"build":None,"path":None}
+
+@lru_cache(maxsize=1)
+def catalog_summary():
+    source,rows=bambu_studio_catalog_rows()
+    rows=rows or fallback_bambu_catalog_rows()
+    all_palette=catalog_palette("all")
+    core_palette=catalog_palette("core")
+    family_counts=Counter(item["series"] for item in all_palette)
+    return {
+        "source":source or "built-in fallback",
+        "bambuStudio":installed_bambu_studio_version(),
+        "totalRows":len(rows),
+        "coreUsableCount":len(core_palette),
+        "allUsableCount":len(all_palette),
+        "families":[
+            {"series":series,"count":count}
+            for series,count in sorted(family_counts.items(), key=lambda item:(-item[1], item[0]))
+        ],
+    }
+
+def fallback_bambu_catalog_rows():
+    rows=[]
+    for name,color in BAMBU_PLA:
+        series=filament_family(name)
+        color_name=name.removeprefix(series).strip() or series
+        _,filament_id=profile_for_anchor(series)
+        rows.append({
+            "fila_id":filament_id,
+            "fila_type":series,
+            "fila_color_name":{"en":color_name},
+            "color_code":"",
+            "fila_color":[hx(color)],
+            "fallback":True,
+        })
+    return rows
 
 @lru_cache(maxsize=1)
 def installed_bambu_color_names():
-    roots=[
-        Path.home()/"Library"/"Application Support"/"BambuStudioBeta",
-        Path.home()/"Library"/"Application Support"/"BambuStudio",
-    ]
-    if os.name == "nt" and os.environ.get("APPDATA"):
-        roots=[
-            Path(os.environ["APPDATA"])/"BambuStudioBeta",
-            Path(os.environ["APPDATA"])/"BambuStudio",
-        ]
     names={}
-    for root in roots:
-        catalog=root/"system"/"BBL"/"filament"/"filaments_color_codes.json"
-        if not catalog.exists():
+    _,rows=bambu_studio_catalog_rows()
+    for row in rows or fallback_bambu_catalog_rows():
+        if not isinstance(row,dict):
             continue
-        try:
-            rows=json.loads(catalog.read_text(errors="replace")).get("data",[])
-        except (OSError, ValueError, AttributeError):
+        series=str(row.get("fila_type") or "").strip()
+        english=bambu_catalog_color_name(row)
+        if not series or not english:
             continue
-        for row in rows:
-            if not isinstance(row,dict):
-                continue
-            series=str(row.get("fila_type") or "").strip()
-            english=(row.get("fila_color_name") or {}).get("en")
-            if not series or not english:
-                continue
-            for color in row.get("fila_color") or []:
-                names.setdefault((series,hx(color)),f"{series} {english}")
+        for color in bambu_catalog_hexes(row):
+            names.setdefault((series,color),f"{series} {english}")
     return names
 
 def official_filament_name(series, color):
@@ -435,12 +718,22 @@ def official_filament_name(series, color):
     )
 
 def read_bambu_inventory(required=True, minimum_colors=MIN_REAL_SLOTS):
+    catalog_info=catalog_summary()
     inventory_match=next(((label,path) for label,path in BAMBU_INVENTORY_LOCATIONS if path.exists()),None)
     inventory_label,inventory_path=inventory_match if inventory_match else (None,None)
     if inventory_path is None:
         if required:
             raise RuntimeError("Bambu Studio filament inventory was not found. Enable Inventory Beta and add active PLA spools.")
-        return {"source":None,"allCount":0,"usableCount":0,"totalGrams":0.0,"spools":[]}
+        catalog_options=catalog_palette("all")
+        return {
+            "source":None,
+            "allCount":0,
+            "usableCount":0,
+            "totalGrams":0.0,
+            "catalog":catalog_info,
+            "anchorOptions":[anchor_option_payload(item) for item in catalog_options],
+            "spools":[],
+        }
     payload=json.loads(inventory_path.read_text(errors="replace"))
     raw_spools=payload.get("spools",[]) if isinstance(payload,dict) else []
     spools=[]
@@ -475,6 +768,8 @@ def read_bambu_inventory(required=True, minimum_colors=MIN_REAL_SLOTS):
         "allCount":len(raw_spools),
         "usableCount":len(spools),
         "totalGrams":round(sum(item["remainingGrams"] for item in spools),1),
+        "catalog":catalog_info,
+        "anchorOptions":[anchor_option_payload(item) for item in catalog_palette("all",{"spools":spools})],
         "spools":spools,
     }
 
@@ -493,25 +788,54 @@ def inventory_palette(inventory):
             by_color[spool["color"]]=spool
     return list(by_color.values())
 
-def catalog_palette(scope="core", inventory=None):
+def catalog_palette(scope="core", inventory=None, material_families=None):
+    material_families=normalize_material_families(material_families)
     options=[]
-    for name,color in BAMBU_PLA:
-        preset,filament_id=profile_for_anchor(name)
+    catalog_source,rows=bambu_studio_catalog_rows()
+    rows=rows or fallback_bambu_catalog_rows()
+    seen=set()
+    for row in rows:
+        if not isinstance(row,dict):
+            continue
+        series=str(row.get("fila_type") or "").strip()
+        if not supported_catalog_family(series,scope):
+            continue
+        if material_families and series not in material_families:
+            continue
+        colors=bambu_catalog_hexes(row)
+        if len(colors) != 1:
+            continue
+        color=colors[0]
+        color_name=bambu_catalog_color_name(row)
+        if not color_name:
+            continue
+        key=(series,color)
+        if key in seen:
+            continue
+        seen.add(key)
+        preset,default_filament_id=profile_for_anchor(series)
+        filament_id=str(row.get("fila_id") or default_filament_id)
+        color_code=str(row.get("color_code") or row.get("fila_color_code") or "")
+        name=f"{series} {color_name}"
         options.append({
             "name":name,
-            "series":filament_family(name),
+            "series":series,
             "brand":"Bambu Lab",
-            "color":hx(color),
+            "color":color,
             "preset":preset,
             "filamentID":filament_id,
             "remainingGrams":None,
             "initialGrams":None,
             "availability":"confirm-regionally",
+            "bambuColorCode":color_code,
+            "catalogSource":catalog_source or "built-in fallback",
         })
     if scope=="all" and inventory:
         existing={(item["series"],item["color"]) for item in options}
         for spool in inventory.get("spools",[]):
             key=(spool["series"],spool["color"])
+            if material_families and spool["series"] not in material_families:
+                continue
             if key not in existing and spool.get("brand","").lower().startswith("bambu"):
                 option=dict(spool)
                 option["availability"]="local-inventory"
@@ -1300,15 +1624,17 @@ def export_preview_mesh(archive, colors, destination, material_prefix="slot",
             for raw_line in source:
                 if b"<vertex " not in raw_line:
                     continue
-                attrs=dict(XML_ATTRIBUTE_PATTERN.findall(raw_line.decode("utf-8", errors="replace")))
-                try:
-                    values=[float(attrs[key]) for key in ("x","y","z")]
-                except (KeyError,ValueError):
-                    continue
-                source_vertices.extend(values)
-                for axis,value in enumerate(values):
-                    low[axis]=min(low[axis],value)
-                    high[axis]=max(high[axis],value)
+                text=raw_line.decode("utf-8", errors="replace")
+                for tag in VERTEX_TAG_PATTERN.findall(text):
+                    attrs=dict(XML_ATTRIBUTE_PATTERN.findall(tag))
+                    try:
+                        values=[float(attrs[key]) for key in ("x","y","z")]
+                    except (KeyError,ValueError):
+                        continue
+                    source_vertices.extend(values)
+                    for axis,value in enumerate(values):
+                        low[axis]=min(low[axis],value)
+                        high[axis]=max(high[axis],value)
     if not source_vertices:
         return None
 
@@ -1337,16 +1663,18 @@ def export_preview_mesh(archive, colors, destination, material_prefix="slot",
             for raw_line in source:
                 if b"<triangle " not in raw_line:
                     continue
-                attrs=dict(XML_ATTRIBUTE_PATTERN.findall(raw_line.decode("utf-8", errors="replace")))
-                try:
-                    mapped=tuple(display_index(offset+int(attrs[key])) for key in ("v1","v2","v3"))
-                except (KeyError,ValueError):
-                    continue
-                if None in mapped or len(set(mapped)) < 3:
-                    continue
-                face_key=tuple(sorted(mapped))
-                if face_key not in display_faces:
-                    display_faces[face_key]=(mapped,preview_face_slot(attrs.get("paint_color"),len(colors)))
+                text=raw_line.decode("utf-8", errors="replace")
+                for tag in TRIANGLE_TAG_PATTERN.findall(text):
+                    attrs=dict(XML_ATTRIBUTE_PATTERN.findall(tag))
+                    try:
+                        mapped=tuple(display_index(offset+int(attrs[key])) for key in ("v1","v2","v3"))
+                    except (KeyError,ValueError):
+                        continue
+                    if None in mapped or len(set(mapped)) < 3:
+                        continue
+                    face_key=tuple(sorted(mapped))
+                    if face_key not in display_faces:
+                        display_faces[face_key]=(mapped,preview_face_slot(attrs.get("paint_color"),len(colors)))
 
     faces_by_slot={}
     for mapped,slot in display_faces.values():
@@ -1363,6 +1691,91 @@ def export_preview_mesh(archive, colors, destination, material_prefix="slot",
             for first,second,third in faces_by_slot[slot]:
                 output.write(f"f {first} {second} {third}\n")
     return obj_path
+
+def preview_slot_usage(archive, slot_count, grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION):
+    """
+    Count painted slots after the same grid-reduction used by the viewport OBJ.
+    This is a planning sample, not the final remap source: hidden/small paint
+    states still get a guard weight from the original paint-state usage.
+    """
+    model_names=sorted(
+        name for name in archive.namelist()
+        if name.lower().startswith("3d/objects/") and name.lower().endswith(".model")
+    )
+    if not model_names:
+        return Counter()
+
+    source_vertices=array("f")
+    offsets={}
+    low=[float("inf")]*3
+    high=[float("-inf")]*3
+    for name in model_names:
+        offsets[name]=len(source_vertices)//3
+        with archive.open(name) as source:
+            for raw_line in source:
+                if b"<vertex " not in raw_line:
+                    continue
+                text=raw_line.decode("utf-8", errors="replace")
+                for tag in VERTEX_TAG_PATTERN.findall(text):
+                    attrs=dict(XML_ATTRIBUTE_PATTERN.findall(tag))
+                    try:
+                        values=[float(attrs[key]) for key in ("x","y","z")]
+                    except (KeyError,ValueError):
+                        continue
+                    source_vertices.extend(values)
+                    for axis,value in enumerate(values):
+                        low[axis]=min(low[axis],value)
+                        high[axis]=max(high[axis],value)
+    if not source_vertices:
+        return Counter()
+
+    max_extent=max(high[axis]-low[axis] for axis in range(3)) or 1.0
+    cell=max_extent/max(8,int(grid_resolution))
+    clustered={}
+    display_faces={}
+
+    def display_index(source_index):
+        base=source_index*3
+        if base+2 >= len(source_vertices):
+            return None
+        point=(source_vertices[base],source_vertices[base+1],source_vertices[base+2])
+        key=tuple(int(math.floor((point[axis]-low[axis])/cell)) for axis in range(3))
+        mapped=clustered.get(key)
+        if mapped is None:
+            mapped=len(clustered)+1
+            clustered[key]=mapped
+        return mapped
+
+    for name in model_names:
+        offset=offsets[name]
+        with archive.open(name) as source:
+            for raw_line in source:
+                if b"<triangle " not in raw_line:
+                    continue
+                text=raw_line.decode("utf-8", errors="replace")
+                for tag in TRIANGLE_TAG_PATTERN.findall(text):
+                    attrs=dict(XML_ATTRIBUTE_PATTERN.findall(tag))
+                    try:
+                        mapped=tuple(display_index(offset+int(attrs[key])) for key in ("v1","v2","v3"))
+                    except (KeyError,ValueError):
+                        continue
+                    if None in mapped or len(set(mapped)) < 3:
+                        continue
+                    face_key=tuple(sorted(mapped))
+                    if face_key not in display_faces:
+                        display_faces[face_key]=preview_face_slot(attrs.get("paint_color"),slot_count)
+    return Counter(display_faces.values())
+
+def blend_preview_usage(paint_usage, preview_usage):
+    paint_total=sum(paint_usage.values()) or 1.0
+    preview_total=sum(preview_usage.values()) or 1.0
+    blended=Counter()
+    slots=set(paint_usage) | set(preview_usage)
+    for slot in slots:
+        paint_weight=float(paint_usage.get(slot,0.0))
+        preview_weight=float(preview_usage.get(slot,0.0)) * (paint_total/preview_total)
+        blended[slot]=preview_weight*PREVIEW_USAGE_BLEND + paint_weight*(1.0-PREVIEW_USAGE_BLEND)
+    return blended
 
 def recolor_preview_mesh(source_mesh, colors, destination, material_prefix):
     """Reuse reduced preview geometry for another analytical color overlay."""
@@ -1384,29 +1797,123 @@ def anchor_name(anchor):
 def anchor_color(anchor):
     return anchor["color"]
 
+def anchor_key(anchor):
+    return f"{str(anchor.get('series') or filament_family(anchor_name(anchor))).strip()}|{anchor_color(anchor)}"
+
+def anchor_option_payload(anchor):
+    series=str(anchor.get("series") or filament_family(anchor_name(anchor))).strip()
+    preset,filament_id=profile_for_anchor(series)
+    return {
+        "key":anchor_key(anchor),
+        "name":anchor_name(anchor),
+        "series":series,
+        "brand":str(anchor.get("brand") or "Bambu Lab"),
+        "color":anchor_color(anchor),
+        "preset":str(anchor.get("preset") or preset),
+        "filamentID":str(anchor.get("filamentID") or filament_id),
+        "remainingGrams":anchor.get("remainingGrams"),
+        "availability":anchor.get("availability"),
+        "catalogSource":anchor.get("catalogSource"),
+    }
+
+def parse_csv_tokens(value):
+    if value is None:
+        return []
+    if isinstance(value,(list,tuple,set)):
+        raw=[]
+        for item in value:
+            raw.extend(parse_csv_tokens(item))
+        return raw
+    return [part.strip() for part in re.split(r"[,;]", str(value)) if part.strip()]
+
+def normalize_material_families(value):
+    requested=parse_csv_tokens(value)
+    if not requested:
+        return []
+    valid={family.lower():family for family in PROFILE_BY_FAMILY if supported_catalog_family(family,"all")}
+    aliases={
+        "all":"all",
+        "auto":"all",
+        "*":"all",
+        "default":"all",
+    }
+    normalized=[]
+    for item in requested:
+        lookup=aliases.get(item.lower(), item.lower())
+        if lookup=="all":
+            return []
+        family=valid.get(lookup)
+        if family is None:
+            raise RuntimeError(
+                f"Unknown or unsupported Bambu material family {item!r}. "
+                "Choose Bambu PLA families such as PLA Basic, PLA Matte, PLA Silk+, or PLA Pure."
+            )
+        if family not in normalized:
+            normalized.append(family)
+    return normalized
+
+def normalize_anchor_keys(value):
+    return parse_csv_tokens(value)
+
+def filter_material_families(pool, material_families=None):
+    families=set(normalize_material_families(material_families))
+    if not families:
+        return list(pool)
+    return [item for item in pool if str(item.get("series") or filament_family(anchor_name(item))).strip() in families]
+
+def anchor_matches_key(anchor, key):
+    normalized=str(key or "").strip()
+    if not normalized:
+        return False
+    lowered=normalized.lower()
+    return (
+        anchor_key(anchor).lower()==lowered
+        or anchor_color(anchor).lower()==lowered
+        or anchor_name(anchor).lower()==lowered
+    )
+
+def resolve_pinned_anchors(pool, anchor_keys):
+    resolved=[]
+    missing=[]
+    for key in normalize_anchor_keys(anchor_keys):
+        match=next((candidate for candidate in pool if anchor_matches_key(candidate,key)),None)
+        if match is None:
+            missing.append(key)
+            continue
+        if anchor_color(match) not in {anchor_color(anchor) for anchor in resolved}:
+            resolved.append(match)
+    if missing:
+        raise RuntimeError(
+            "Selected anchor filaments are not available with the current filament source/material filters: "
+            + ", ".join(missing)
+        )
+    return resolved
+
 def nearest_anchor_error(color, anchors):
     return min((dist(color,anchor_color(anchor)),i+1,anchor_name(anchor),anchor_color(anchor))
                for i,anchor in enumerate(anchors))
 
-def best_mix_recipe(color, anchors, mix_model="bambu", allow_three=True):
-    ah=[anchor_color(anchor) for anchor in anchors]
+def best_mix_recipe(color, anchors, mix_model="bambu", allow_three=True, high_fidelity=False):
     best_err=999999.0; best=None
-    for i,j in combinations(range(len(anchors)),2):
-        for r0,r1 in R2:
-            p=mix([ah[i],ah[j]],[r0,r1],mix_model); d=dist(color,p)
-            if d<best_err:
-                best_err=d; best=([i+1,j+1],[r0,r1],p)
+    pair_family="fine2" if high_fidelity else "standard2"
+    for component_slots,ratios,preview in mix_recipe_index(anchors,mix_model,pair_family,"none"):
+        d=dist(color,preview)
+        if d<best_err:
+            best_err=d; best=(list(component_slots),list(ratios),preview)
     if best is None:
         direct=nearest_anchor_error(color,anchors)
         return [direct[1]],[1.0],direct[3],direct[0]
-    if allow_three and best_err>12:
+    three_color_trigger=0.0 if high_fidelity else 12.0
+    if allow_three and best_err>three_color_trigger:
         best3_err=best_err; best3=best
-        for combo in combinations(range(len(anchors)),3):
-            for r0,r1,r2 in R3:
-                p=mix([ah[combo[0]],ah[combo[1]],ah[combo[2]]],[r0,r1,r2],mix_model); d=dist(color,p)
-                if d<best3_err:
-                    best3_err=d; best3=([combo[0]+1,combo[1]+1,combo[2]+1],[r0,r1,r2],p)
-        if (best_err-best3_err)>=2.5 and ((best_err-best3_err)/max(best_err,1e-9))>=0.15:
+        triple_family="fine3" if high_fidelity else "standard3"
+        for component_slots,ratios,preview in mix_recipe_index(anchors,mix_model,"none",triple_family):
+            d=dist(color,preview)
+            if d<best3_err:
+                best3_err=d; best3=(list(component_slots),list(ratios),preview)
+        required_gain=0.35 if high_fidelity else 2.5
+        required_ratio=0.02 if high_fidelity else 0.15
+        if (best_err-best3_err)>=required_gain and ((best_err-best3_err)/max(best_err,1e-9))>=required_ratio:
             best_err=best3_err; best=best3
     return best[0],best[1],best[2],best_err
 
@@ -1453,6 +1960,34 @@ def color_saturation(color):
     channels=rgb(color)
     return max(channels)-min(channels)
 
+def color_hue_degrees(color):
+    r,g,b=(channel/255.0 for channel in rgb(color))
+    hue,saturation,_=colorsys.rgb_to_hsv(r,g,b)
+    if saturation < 0.08:
+        return None
+    return hue*360.0
+
+def spectrum_bucket(color):
+    hue=color_hue_degrees(color)
+    if hue is None:
+        lum=luminance(color)
+        if lum < 70:
+            return "neutral-dark"
+        if lum > 205:
+            return "neutral-light"
+        return "neutral-mid"
+    return f"hue-{int(hue//45)%8}"
+
+def spectrum_distance(target, candidate):
+    base=dist(target,anchor_color(candidate))
+    target_bucket=spectrum_bucket(target)
+    candidate_bucket=spectrum_bucket(anchor_color(candidate))
+    if target_bucket==candidate_bucket:
+        return base*0.82
+    if target_bucket.startswith("neutral") or candidate_bucket.startswith("neutral"):
+        return base+2.2
+    return base+4.0
+
 def anchor_signature(anchors):
     return tuple(anchor_color(anchor) for anchor in anchors)
 
@@ -1477,6 +2012,17 @@ def shortlist_anchor_pool(pool, targets, target_total, limit=ANCHOR_POOL_LIMIT):
     significant=sorted(targets,key=lambda item:item[2],reverse=True)[:14]
     for _,color,_ in significant:
         for candidate in sorted(pool,key=lambda item:dist(color,anchor_color(item)))[:4]:
+            add(candidate)
+    by_spectrum=defaultdict(list)
+    for _,color,weight in targets:
+        by_spectrum[spectrum_bucket(color)].append((color,weight))
+    for _,bucket_items in sorted(
+        by_spectrum.items(),
+        key=lambda item:sum(weight for _,weight in item[1]),
+        reverse=True,
+    )[:10]:
+        representative=max(bucket_items,key=lambda item:item[1])[0]
+        for candidate in sorted(pool,key=lambda item:spectrum_distance(representative,item))[:5]:
             add(candidate)
     for sorter in (
         lambda item:luminance(anchor_color(item)),
@@ -1507,8 +2053,9 @@ def palette_usage_stats(rows, usage, quality_bias):
     weak_share=sum(weights.get(row[0],0.0) for row in rows if float(row[8])>limit)/total
     return mixed_slots,mixed_share,weak_share
 
-def palette_selection_score(old_colors, usage, anchors, quality_bias, mix_model="bambu", reference=None):
-    newc,_,_,_,_,rows=build_palette(old_colors,anchors,usage,quality_bias,mix_model)
+def palette_selection_score(old_colors, usage, anchors, quality_bias, mix_model="bambu", reference=None,
+                            planner_mode="best"):
+    newc,_,_,_,_,rows=build_palette(old_colors,anchors,usage,quality_bias,mix_model,planner_mode)
     metrics=quality_metrics(rows,usage,old_colors,reference,mix_model)
     mixed_slots,mixed_share,weak_share=palette_usage_stats(rows,usage,quality_bias)
     practical_pressure=(100-clamp_quality_bias(quality_bias))/100
@@ -1524,40 +2071,83 @@ def palette_selection_score(old_colors, usage, anchors, quality_bias, mix_model=
 
 def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slots="auto",
                    custom_catalog_path=None, reference=None, mix_model="bambu",
-                   quality_bias=DEFAULT_QUALITY_BIAS):
+                   quality_bias=DEFAULT_QUALITY_BIAS, planner_mode="best",
+                   material_families=None, pinned_anchor_keys=None):
+    planner_mode=normalize_planner_mode(planner_mode)
+    material_families=normalize_material_families(material_families)
+    pinned_anchor_keys=normalize_anchor_keys(pinned_anchor_keys)
     requested=None if str(real_slots)=="auto" else int(real_slots)
     mix_limit=quality_mix_limit(quality_bias)
     minimum=4 if mode=="cmykw" else MIN_REAL_SLOTS
-    if requested is not None and (requested<minimum or requested>MAX_REAL_SLOTS):
-        raise RuntimeError(f"{mode.upper()} strategy requires {minimum}-{MAX_REAL_SLOTS} physical slots")
+    maximum=maximum_requested_slots_for_mode(mode)
+    if requested is not None and (requested<minimum or requested>maximum):
+        raise RuntimeError(f"{mode.upper()} strategy requires {minimum}-{maximum} physical slots")
     if palette_source=="exact-cmykw":
+        if material_families:
+            raise RuntimeError("Material-family filters are not used with Exact CMYKW.")
+        if pinned_anchor_keys:
+            raise RuntimeError("Manual anchor pins are not used with Exact CMYKW.")
         if mode!="cmykw":
             raise RuntimeError("Exact CMYKW filament source requires the CMYKW palette strategy")
-        return exact_cmykw_palette()[:requested or MAX_REAL_SLOTS]
+        return exact_cmykw_palette()[:requested or maximum]
+    if mode=="cmykw" and pinned_anchor_keys:
+        raise RuntimeError("Manual anchor pins are available for Bambu PLA strategy. CMYKW chooses cyan, magenta, yellow, black and white roles.")
     if palette_source=="inventory":
         pool=inventory_palette(inventory)
     elif palette_source=="custom":
+        if material_families:
+            raise RuntimeError("Material-family filters are available for Bambu filament sources, not custom JSON libraries.")
+        if pinned_anchor_keys:
+            raise RuntimeError("Manual anchor pins are available for Bambu filament sources, not custom JSON libraries.")
         pool=custom_palette(custom_catalog_path)
     else:
-        pool=catalog_palette("all" if palette_source=="all-bambu" else "core",inventory)
+        pool=catalog_palette("all" if palette_source=="all-bambu" else "core",inventory,material_families)
+    if palette_source=="inventory":
+        pool=filter_material_families(pool,material_families)
+    pinned_anchors=resolve_pinned_anchors(pool,pinned_anchor_keys)
+    if requested is not None and len(pinned_anchors)>requested:
+        raise RuntimeError(f"{len(pinned_anchors)} manual anchors were selected, but Physical slots is {requested}.")
     used,total,targets,target_total=weighted_color_targets(old_colors,usage,reference,quality_bias)
     if mode!="cmykw":
-        pool=shortlist_anchor_pool(pool,targets,target_total)
+        pool=shortlist_anchor_pool(pool,targets,target_total,anchor_pool_limit_for_quality(quality_bias,planner_mode))
+        for anchor in reversed(pinned_anchors):
+            if anchor_color(anchor) not in {anchor_color(candidate) for candidate in pool}:
+                pool.insert(0,anchor)
     else:
         pool=unique_palette_options(pool)
+    score_hints=()
+    if mode!="cmykw":
+        score_hints=anchor_score_hint_database(
+            tuple(anchor_color(anchor) for anchor in pool),
+            tuple(color for _,color,_ in targets),
+            mix_model,
+            score_pair_family(quality_bias,planner_mode),
+            score_triple_family(quality_bias,planner_mode),
+            round(mix_limit,3),
+        )
+    score_cache={}
+    full_palette_score_cache={}
     def score(anchors):
         if not anchors:
             return 999999.0
+        score_key=tuple(sorted(anchor_signature(anchors)))
+        cached=score_cache.get(score_key)
+        if cached is not None:
+            return cached
         ah=[anchor_color(anchor) for anchor in anchors]
+        anchor_colors=set(ah)
         s=0.0
-        for _,c,w in targets:
+        for target_index,(_,c,w) in enumerate(targets):
             direct=min(dist(c,a) for a in ah)
-            pair=direct
-            for i,j in combinations(range(len(ah)),2):
-                candidate=dist(c,mix([ah[i],ah[j]],[.5,.5],mix_model))
-                if candidate<=mix_limit:
-                    pair=min(pair,candidate)
-            s+=(w/target_total)*pair
+            candidate=direct
+            if target_index < len(score_hints):
+                for components,error in score_hints[target_index]:
+                    if error>=candidate:
+                        break
+                    if all(component in anchor_colors for component in components):
+                        candidate=error
+                        break
+            s+=(w/target_total)*candidate
         lums=[luminance(a) for a in ah]
         if max(lums)<210: s+=12
         if min(lums)>65: s+=12
@@ -1565,6 +2155,7 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
             for j in range(i+1,len(ah)):
                 d=dist(ah[i],ah[j])
                 if d<MIN_ANCHOR_DE: s+=(MIN_ANCHOR_DE-d)*4
+        score_cache[score_key]=s
         return s
     def greedy_fill(start, count):
         selected=list(start)
@@ -1585,9 +2176,44 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
                 raise RuntimeError("Could not find enough distinct physical filament anchors")
             selected.append(best[1])
         return selected
-    def local_optimize(current):
+    def full_palette_score(current):
+        key=tuple(sorted(anchor_signature(current)))
+        cached=full_palette_score_cache.get(key)
+        if cached is not None:
+            return cached
+        value=palette_selection_score(old_colors,usage,current,quality_bias,mix_model,reference,planner_mode)[0]
+        full_palette_score_cache[key]=value
+        return value
+    def local_optimize(current, fixed_count=0):
         current=list(current)
-        return current,palette_selection_score(old_colors,usage,current,quality_bias,mix_model,reference)[0]
+        best_score=full_palette_score(current)
+        if planner_mode!="best":
+            return current,best_score
+        best_anchors=list(current)
+        passes=2 if high_fidelity_quality(quality_bias,planner_mode) else 1
+        for _ in range(passes):
+            improved=False
+            for index in range(len(best_anchors)):
+                if index < fixed_count:
+                    continue
+                proxy_trials=[]
+                for candidate in pool:
+                    if any(anchor_color(candidate)==anchor_color(anchor) for slot,anchor in enumerate(best_anchors) if slot != index):
+                        continue
+                    trial=list(best_anchors)
+                    trial[index]=candidate
+                    if not distinct_anchor_set(trial):
+                        continue
+                    proxy_trials.append((score(trial),trial))
+                for _,trial in sorted(proxy_trials,key=lambda item:item[0])[:LOCAL_OPTIMIZE_CANDIDATE_LIMIT]:
+                    trial_score=full_palette_score(trial)
+                    if trial_score < best_score - 0.02:
+                        best_anchors=trial
+                        best_score=trial_score
+                        improved=True
+            if not improved:
+                break
+        return best_anchors,best_score
     def beam_candidates(count):
         beams=[()]
         for _ in range(count):
@@ -1609,18 +2235,21 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
                     continue
                 seen.add(key)
                 kept.append(trial)
-                if len(kept)>=ANCHOR_BEAM_WIDTH:
+                if len(kept)>=anchor_beam_width_for_quality(quality_bias,planner_mode):
                     break
             beams=kept
             if not beams:
                 break
         return [list(beam) for beam in beams if len(beam)==count]
     def choose_count(count):
+        if len(pinned_anchors)>count:
+            raise RuntimeError(f"{len(pinned_anchors)} manual anchors were selected, but this plan only allows {count} physical slots.")
         if len({anchor_color(item) for item in pool})<count:
             raise RuntimeError(f"Filament source contains fewer than {count} distinct colors")
         if mode=="cmykw":
             return select_cmykw_anchors(pool,count)
-        starts=[[]]
+        base_start=list(pinned_anchors)
+        starts=[base_start]
         seeded=[]
         if any(luminance(c)>205 and (w/total)>.01 for _,c,w in used):
             seeded.append(min(pool,key=lambda b:abs(luminance(anchor_color(b))-245)))
@@ -1629,10 +2258,11 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
             if dark not in seeded:
                 seeded.append(dark)
         if seeded and distinct_anchor_set(seeded):
-            starts.append(seeded[:count])
+            starts.append((base_start+seeded)[:count])
         for _,color,_ in sorted(used,key=lambda item:item[2],reverse=True)[:min(6,len(used))]:
-            starts.append([min(pool,key=lambda candidate:dist(color,anchor_color(candidate)))])
-        starts.extend(beam_candidates(count))
+            starts.append(base_start+[min(pool,key=lambda candidate:dist(color,anchor_color(candidate)))])
+        if not pinned_anchors:
+            starts.extend(beam_candidates(count))
         best=None
         seen=set()
         for start in starts:
@@ -1640,7 +2270,7 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
                 continue
             try:
                 filled=start if len(start)==count else greedy_fill(start,count)
-                current,current_score=local_optimize(filled)
+                current,current_score=filled,full_palette_score(filled)
             except RuntimeError:
                 continue
             key=tuple(sorted(anchor_signature(current)))
@@ -1651,18 +2281,33 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
                 best=(current_score,current)
         if best is None:
             raise RuntimeError("Could not find enough distinct physical filament anchors")
+        if planner_mode=="best":
+            return local_optimize(best[1], fixed_count=len(pinned_anchors))[0]
         return best[1]
-    counts=[requested] if requested is not None else list(range(minimum,MAX_REAL_SLOTS+1))
+    counts=[requested] if requested is not None else [
+        count for count in automatic_slot_counts_for_mode(mode)
+        if count >= len(pinned_anchors)
+    ]
+    if requested is None and mode!="cmykw":
+        active_target_colors=len({hx(color) for _,color,weight in used if weight>0})
+        if active_target_colors>=18:
+            counts=[count for count in counts if count>=5]
+        elif active_target_colors>=10:
+            counts=[count for count in counts if count>=4]
+    if not counts:
+        raise RuntimeError(f"{len(pinned_anchors)} manual anchors were selected, but the automatic slot range cannot fit them.")
     trials=[]
     for count in counts:
         anchors=choose_count(count)
-        weighted=palette_selection_score(old_colors,usage,anchors,quality_bias,mix_model,reference)[0]
+        weighted=palette_selection_score(old_colors,usage,anchors,quality_bias,mix_model,reference,planner_mode)[0]
         # A new physical slot must buy noticeable visual improvement.
         physical_penalty=(count-minimum)*(1.35-(clamp_quality_bias(quality_bias)/100)*0.9)
         trials.append((weighted+physical_penalty,weighted,anchors))
     return min(trials,key=lambda trial:trial[0])[2]
 
-def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_BIAS, mix_model="bambu"):
+def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_BIAS,
+                  mix_model="bambu", planner_mode="best"):
+    planner_mode=normalize_planner_mode(planner_mode)
     real_count=len(anchors)
     newc=[anchor_color(anchor) for anchor in anchors]
     ism=["0"]*real_count; comps=[""]*real_count; ratios=[""]*real_count
@@ -1672,11 +2317,22 @@ def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_
     quality_bias=clamp_quality_bias(quality_bias)
     mix_limit=quality_mix_limit(quality_bias)
     min_gain=MIN_MIX_GAIN+(100-quality_bias)*0.045
+    high_fidelity=high_fidelity_quality(quality_bias,planner_mode)
+    if high_fidelity:
+        min_gain=max(0.3,min_gain*0.45)
     max_unique_mixes=max(2,min(MAX_BAMBU_PAINT_SLOT-real_count,3+round(quality_bias/6)))
+    if high_fidelity:
+        max_unique_mixes=max(max_unique_mixes,min(MAX_BAMBU_PAINT_SLOT-real_count,8+round(quality_bias/4)))
     mix_candidates=[]
     for old_slot,target in enumerate(old_colors, start=1):
         direct_err,direct_slot,direct_name,direct_hex=nearest_anchor_error(target,anchors)
-        cs,rs,preview,mix_err=best_mix_recipe(target,anchors,mix_model,quality_bias>=70)
+        cs,rs,preview,mix_err=best_mix_recipe(
+            target,
+            anchors,
+            mix_model,
+            allow_three=quality_bias>=70,
+            high_fidelity=high_fidelity,
+        )
         gain=direct_err-mix_err
         weight=float((usage or {}).get(old_slot,1.0))
         old_slot_to_new_slot[old_slot]=direct_slot
@@ -1792,11 +2448,15 @@ def printability_metrics(rows, usage, real_count, output_count, layouts, project
     difficulty="Low" if complexity_score<38 else ("Medium" if complexity_score<68 else "High")
     suggestions=[]
     if len(used_mixed_slots)>10:
-        suggestions.append("Move the quality-versus-waste control toward practical to reduce logical mixed colors.")
+        suggestions.append("For fewer generated mix slots, turn off Smart quality and lower Quality vs waste, or switch Planner to Fast for a simpler pass.")
     if mixed_share>0.55:
         suggestions.append("Most painted usage is mixed; run a small calibration print before committing material.")
-    if real_count<MAX_REAL_SLOTS and len(used_mixed_slots)>4:
-        suggestions.append("An additional owned physical anchor may reduce mixed regions and purge risk.")
+    if real_count<DEFAULT_AUTO_MAX_REAL_SLOTS and len(used_mixed_slots)>4:
+        suggestions.append("Try a higher Physical slots value or a broader Filament source; closer anchors can reduce mixed regions and purge risk.")
+    elif real_count>=DEFAULT_AUTO_MAX_REAL_SLOTS and real_count<MAX_REAL_SLOTS and len(used_mixed_slots)>4:
+        suggestions.append("Choose 7 exp or 8 exp only when you do not need the support-material slot; otherwise add closer filament colors.")
+    if real_count>DEFAULT_AUTO_MAX_REAL_SLOTS:
+        suggestions.append("This is an experimental high-fidelity physical-slot plan; verify support-material slot needs before printing.")
     return {
         "physicalSlots":real_count,
         "mixedSlots":len(used_mixed_slots),
@@ -1810,26 +2470,27 @@ def printability_metrics(rows, usage, real_count, output_count, layouts, project
         "recommendations":suggestions,
     }
 
-def candidate_palette(palette_source, inventory, custom_catalog_path):
+def candidate_palette(palette_source, inventory, custom_catalog_path, material_families=None):
     if palette_source=="inventory":
-        return inventory_palette(inventory)
+        return filter_material_families(inventory_palette(inventory), material_families)
     if palette_source=="custom":
         return custom_palette(custom_catalog_path)
     if palette_source=="exact-cmykw":
         return []
-    return catalog_palette("all" if palette_source=="all-bambu" else "core",inventory)
+    return catalog_palette("all" if palette_source=="all-bambu" else "core",inventory,material_families)
 
 def additional_anchor_recommendation(old_colors, usage, anchors, palette_source, inventory,
-                                     custom_catalog_path, quality_bias, mix_model, current_quality):
+                                     custom_catalog_path, quality_bias, mix_model, current_quality,
+                                     planner_mode="best", material_families=None):
     if len(anchors)>=MAX_REAL_SLOTS or palette_source=="exact-cmykw":
         return None
     selected={anchor_color(anchor) for anchor in anchors}
     best=None
-    for candidate in candidate_palette(palette_source,inventory,custom_catalog_path):
+    for candidate in candidate_palette(palette_source,inventory,custom_catalog_path,material_families):
         if anchor_color(candidate) in selected:
             continue
         trial=anchors+[candidate]
-        newc,_,_,_,_,rows=build_palette(old_colors,trial,usage,quality_bias,mix_model)
+        newc,_,_,_,_,rows=build_palette(old_colors,trial,usage,quality_bias,mix_model,planner_mode)
         metrics=quality_metrics(rows,usage,old_colors,None,mix_model)
         mix_count=len({row[1] for row in rows if row[3]=="MIX"})
         gain=current_quality["estimatedDeltaE"]-metrics["estimatedDeltaE"]
@@ -1840,12 +2501,93 @@ def additional_anchor_recommendation(old_colors, usage, anchors, palette_source,
         return None
     _,candidate,gain,mix_count,_,metrics=best
     return {
+        "key":anchor_key(candidate),
         "name":anchor_name(candidate),
+        "series":str(candidate.get("series") or filament_family(anchor_name(candidate))).strip(),
         "color":anchor_color(candidate),
         "estimatedDeltaEReduction":round(gain,2),
         "estimatedQualityScore":metrics["qualityScore"],
         "estimatedMixedSlots":mix_count,
-        "availability":"owned" if palette_source=="inventory" else "confirm in selected catalog region",
+        "availability":(
+            "owned, only if support slot is free"
+            if palette_source=="inventory" and len(anchors)>=DEFAULT_AUTO_MAX_REAL_SLOTS else
+            "owned"
+            if palette_source=="inventory" else
+            "confirm in selected catalog region; only if support slot is free"
+            if len(anchors)>=DEFAULT_AUTO_MAX_REAL_SLOTS else
+            "confirm in selected catalog region"
+        ),
+    }
+
+def recipe_items_from_rows(rows, anchors):
+    recipes=[]
+    for old_slot,new_slot,target,kind,label,component_ids,ratio_text,preview,error,direct_error,gain in rows:
+        available_grams=None
+        component_slots=[int(value) for value in component_ids.split(",") if value]
+        if kind=="MIX" and component_slots and all(anchors[slot-1]["remainingGrams"] is not None for slot in component_slots):
+            component_ratios=[float(value) for value in ratio_text.split(",")]
+            available_grams=round(min(anchors[slot-1]["remainingGrams"]/ratio
+                                      for slot,ratio in zip(component_slots,component_ratios)),1)
+        recipes.append({
+            "oldSlot":old_slot,
+            "newSlot":new_slot,
+            "targetColor":target,
+            "kind":kind,
+            "label":label or f"Mixed slot {new_slot}",
+            "components":component_ids,
+            "ratios":ratio_text,
+            "preview":preview,
+            "deltaE":float(error),
+            "directDeltaE":float(direct_error),
+            "visualGain":float(gain),
+            "availableGrams":available_grams,
+        })
+    return recipes
+
+def plan_preview_payload(infile, mode, palette_source, planner_mode, planning_sample,
+                         catalog_region, region_label, catalog_source_label, oldn,
+                         real_count, newc, rows, anchors, real_profiles, quality_bias,
+                         quality_bias_mode, quality, printability, recommendation,
+                         reference_result, imported, warnings, material_families=None,
+                         pinned_anchor_keys=None):
+    return {
+        "type":"planPreview",
+        "input":str(infile),
+        "filename":infile.name,
+        "mode":mode,
+        "paletteSource":palette_source,
+        "plannerMode":planner_mode,
+        "planningSample":planning_sample,
+        "catalogRegion":catalog_region,
+        "catalogRegionLabel":region_label,
+        "catalogSource":catalog_source_label,
+        "materialFamilies":material_families or [],
+        "pinnedAnchorKeys":pinned_anchor_keys or [],
+        "sourceSlots":oldn,
+        "realSlots":real_count,
+        "outputSlots":len(newc),
+        "qualityBias":quality_bias,
+        "qualityBiasMode":quality_bias_mode,
+        "quality":quality,
+        "printability":printability,
+        "recommendation":recommendation,
+        "reference":reference_result,
+        "import":imported,
+        "warnings":warnings,
+        "anchors":[
+            {
+                "key":anchor_key(anchor),
+                "slot":i+1,
+                "name":anchor_name(anchor),
+                "series":str(anchor.get("series") or filament_family(anchor_name(anchor))).strip(),
+                "color":anchor_color(anchor),
+                "preset":real_profiles[i][0],
+                "filamentID":real_profiles[i][1],
+                "remainingGrams":anchor["remainingGrams"],
+            }
+            for i,anchor in enumerate(anchors)
+        ],
+        "recipes":recipe_items_from_rows(rows,anchors),
     }
 
 def smart_quality_plan_score(metrics, rows, usage, real_count, output_count, quality_bias):
@@ -1862,21 +2604,70 @@ def smart_quality_plan_score(metrics, rows, usage, real_count, output_count, qua
         - metrics.get("contrastRetention",0)*0.004
     )
 
+def smart_quality_followups(summary, mode):
+    if summary["qualityBias"] >= 95:
+        return []
+    if summary["estimatedDeltaE"] <= 0.05 and summary["maximumDeltaE"] <= 0.10 and summary["mixedSlots"] == 0:
+        return []
+    too_far=summary["estimatedDeltaE"] > 3.2 or summary["maximumDeltaE"] > 11.5 or summary["qualityScore"] < 88
+    too_wasteful=summary["outputSlots"] > 25 or summary["paintedMixedShare"] > 72
+    very_clean=summary["estimatedDeltaE"] <= 1.4 and summary["maximumDeltaE"] <= 7.5
+    if mode=="cmykw":
+        if too_far:
+            return [85,100]
+        return [50,85]
+    if too_far and summary["maximumDeltaE"] > 18:
+        return [100]
+    if too_far and too_wasteful:
+        return [100,50]
+    if too_far:
+        return [100,85]
+    if too_wasteful or very_clean:
+        return [50,35]
+    return [50,85]
+
+def append_unique_quality(queue, seen, values, allowed=None):
+    allowed=set(allowed or SMART_QUALITY_CANDIDATES)
+    for value in values:
+        value=int(value)
+        if value in allowed and value not in seen and value not in queue:
+            queue.append(value)
+
 def select_smart_palette(old_colors, usage, mode, inventory, palette_source, real_slots="auto",
-                         custom_catalog_path=None, reference=None, mix_model="bambu"):
+                         custom_catalog_path=None, reference=None, mix_model="bambu", planner_mode="best",
+                         progress=None, material_families=None, pinned_anchor_keys=None):
+    planner_mode=normalize_planner_mode(planner_mode)
     candidates=list(SMART_QUALITY_CANDIDATES)
     if mode=="cmykw":
         candidates=sorted(set(candidates+[75,90]))
     best=None
     summaries=[]
     errors=[]
-    for quality_bias in candidates:
+    skipped=[]
+    evaluated=set()
+    queue=[SMART_QUALITY_PROBE if SMART_QUALITY_PROBE in candidates else candidates[len(candidates)//2]]
+    max_candidates=4 if mode!="cmykw" else 5
+    attempt_index=0
+    while queue and attempt_index < max_candidates:
+        quality_bias=queue.pop(0)
+        if quality_bias in evaluated:
+            continue
+        evaluated.add(quality_bias)
         try:
+            start_progress=0.22 + 0.10 * (attempt_index / max_candidates)
+            done_progress=0.22 + 0.10 * ((attempt_index + 1) / max_candidates)
+            if progress:
+                cache_note=" with cached Bambu mix recipes" if planner_is_best(planner_mode) else ""
+                progress(
+                    start_progress,
+                    f"{planner_mode.title()} adaptive spectrum testing quality {quality_bias}/100{cache_note}"
+                )
             anchors=select_anchors(
                 old_colors,usage,mode,inventory,palette_source,real_slots,
-                custom_catalog_path,reference,mix_model,quality_bias
+                custom_catalog_path,reference,mix_model,quality_bias,planner_mode,
+                material_families,pinned_anchor_keys
             )
-            palette=build_palette(old_colors,anchors,usage,quality_bias,mix_model)
+            palette=build_palette(old_colors,anchors,usage,quality_bias,mix_model,planner_mode)
             rows=palette[-1]
             metrics=quality_metrics(rows,usage,old_colors,reference,mix_model)
             mixed_slots,mixed_share,_=palette_usage_stats(rows,usage,quality_bias)
@@ -1889,10 +2680,16 @@ def select_smart_palette(old_colors, usage, mode, inventory, palette_source, rea
                 "mixedSlots":mixed_slots,
                 "paintedMixedShare":round(mixed_share*100,1),
                 "estimatedDeltaE":metrics["estimatedDeltaE"],
+                "maximumDeltaE":metrics["maximumDeltaE"],
                 "qualityScore":metrics["qualityScore"],
                 "score":round(score,3),
             }
             summaries.append(summary)
+            if progress:
+                progress(
+                    done_progress,
+                    f"Quality {quality_bias}/100 candidate: {len(anchors)} physical, {mixed_slots} mixed, mean Delta E {metrics['estimatedDeltaE']:.2f}"
+                )
             if best is None or score<best["score"]:
                 best={
                     "score":score,
@@ -1902,12 +2699,22 @@ def select_smart_palette(old_colors, usage, mode, inventory, palette_source, rea
                     "metrics":metrics,
                     "summaries":summaries,
                 }
+            if metrics["estimatedDeltaE"] <= 0.05 and metrics["maximumDeltaE"] <= 0.10 and mixed_slots == 0:
+                if progress:
+                    progress(done_progress, "Smart planner found a perfect no-mix palette; skipping heavier candidates")
+                break
+            append_unique_quality(queue,evaluated,smart_quality_followups(summary,mode),candidates)
         except Exception as error:
             errors.append(f"{quality_bias}: {error}")
+            append_unique_quality(queue,evaluated,[85,50,100],candidates)
+        attempt_index+=1
+    skipped=[quality for quality in candidates if quality not in evaluated]
     if best is None:
         detail="; ".join(errors[-3:]) if errors else "no candidate plans were generated"
         raise RuntimeError("Smart quality planning failed: " + detail)
     best["summaries"]=summaries
+    best["skippedQualityCandidates"]=skipped
+    best["smartSearchMode"]="adaptive-spectrum"
     return best
 
 def expected_remapped_paint_counts(source_counts, slot_map, oldn, newn):
@@ -2238,8 +3045,14 @@ def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_
 def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=True, real_slots="auto",
             reference=None, custom_catalog_path=None, quality_bias=DEFAULT_QUALITY_BIAS,
             mix_model="bambu", analysis_dir=None, texture_override=None,
-            internal_colors=48, catalog_region="global", progress=lambda fraction,message: None):
+            internal_colors=48, catalog_region="global", planner_mode="best",
+            planning_sample="paint", plan_only=False, material_families=None,
+            pinned_anchor_keys=None, progress=lambda fraction,message: None):
     infile=Path(infile).expanduser().resolve()
+    planner_mode=normalize_planner_mode(planner_mode)
+    planning_sample=normalize_planning_sample(planning_sample)
+    material_families=normalize_material_families(material_families)
+    pinned_anchor_keys=normalize_anchor_keys(pinned_anchor_keys)
     quality_bias_mode="auto" if is_auto_quality_bias(quality_bias) else "manual"
     quality_bias=DEFAULT_QUALITY_BIAS if quality_bias_mode=="auto" else clamp_quality_bias(quality_bias)
     catalog_region=str(catalog_region or "global").strip().lower()
@@ -2260,6 +3073,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
     warnings=[]
     imported=None
     project_file=infile
+    catalog_source_label=None
     try:
         progress(0.04,f"Opening {infile.name}")
         if infile.suffix.lower() in (".obj",".glb"):
@@ -2288,7 +3102,9 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         elif palette_source=="custom":
             progress(0.12,"Using user supplied filament library")
         else:
-            progress(0.12,f"Using {len(catalog_palette('all' if palette_source=='all-bambu' else 'core',inventory))} Bambu Lab planning colors")
+            catalog_options=catalog_palette('all' if palette_source=='all-bambu' else 'core',inventory,material_families)
+            catalog_source_label=next((item.get("catalogSource") for item in catalog_options if item.get("catalogSource")),None)
+            progress(0.12,f"Using {len(catalog_options)} Bambu Lab planning colors from Bambu Studio catalog data")
             warnings.append(
                 f"Catalog colors are planning choices for {region_label}. "
                 "FullSpectrum does not check live store stock; verify availability before buying filament."
@@ -2308,7 +3124,25 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         reference_result=analyze_reference(reference,reference_tmp) if reference else None
         progress(0.19,"Collecting existing Bambu paint states")
         ordered_codes, code_counts=collect_paint_codes(tmp)
-        usage=paint_slot_usage(code_counts, oldn)
+        paint_usage=paint_slot_usage(code_counts, oldn)
+        usage=paint_usage
+        if planning_sample=="preview":
+            progress(0.205,"Sampling optimized preview mesh for visual color weighting")
+            with zipfile.ZipFile(project_file) as preview_archive:
+                preview_usage=preview_slot_usage(preview_archive,oldn)
+            if preview_usage:
+                usage=blend_preview_usage(paint_usage,preview_usage)
+                warnings.append(
+                    "Planner used optimized preview-mesh color weighting. "
+                    "The final 3MF still remaps the original Bambu paint states exactly."
+                )
+                progress(0.215,f"Preview sample found {len(preview_usage)} visible painted slots")
+            else:
+                warnings.append(
+                    "Preview-weighted planning was requested, but no preview color sample could be built; "
+                    "falling back to original paint-state usage."
+                )
+                planning_sample="paint"
         layouts=filament_array_layouts(obj,oldn)
         source_off_diagonal_zeros={
             key:off_diagonal_zero_count(obj[key],oldn,width)
@@ -2323,58 +3157,53 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "exact-cmykw":"exact CMYKW roles",
         }[palette_source]
         smart_candidates=[]
+        smart_search_mode=None
+        skipped_quality_candidates=[]
         if quality_bias_mode=="auto":
-            progress(0.22,"Testing smart quality/waste plans from painted usage and filament options")
+            progress(0.22,f"Testing smart quality/waste plans with the {planner_mode} planner")
             plan=select_smart_palette(
                 old,usage,mode,inventory,palette_source,real_slots,
-                custom_catalog_path,reference_result,mix_model
+                custom_catalog_path,reference_result,mix_model,planner_mode,progress,
+                material_families,pinned_anchor_keys
             )
             quality_bias=plan["qualityBias"]
             anchors=plan["anchors"]
             newc,ism,comps,ratios,old_slot_to_new_slot,rows=plan["palette"]
             smart_candidates=plan["summaries"]
+            smart_search_mode=plan.get("smartSearchMode")
+            skipped_quality_candidates=plan.get("skippedQualityCandidates",[])
             progress(
                 0.34,
                 f"Smart plan selected quality {quality_bias}/100 with {len(anchors)} physical anchors and {len(newc)-len(anchors)} mixed slots",
             )
         else:
-            progress(0.22,"Generating anchors from painted colors and " + source_label)
+            progress(0.22,f"Generating {planner_mode} anchors from painted colors and " + source_label)
             anchors=select_anchors(old, usage, mode, inventory, palette_source,real_slots,
-                                   custom_catalog_path,reference_result,mix_model,quality_bias)
+                                   custom_catalog_path,reference_result,mix_model,quality_bias,planner_mode,
+                                   material_families,pinned_anchor_keys)
             progress(0.34,"Building mixes with useful predicted visual gain")
             newc,ism,comps,ratios,old_slot_to_new_slot,rows=build_palette(
-                old,anchors,usage,quality_bias,mix_model
+                old,anchors,usage,quality_bias,mix_model,planner_mode
             )
         real_count=len(anchors)
         newn=len(newc)
+        if real_count > DEFAULT_AUTO_MAX_REAL_SLOTS:
+            warnings.append(
+                f"Experimental {real_count}-physical-slot plan: this can improve color fidelity, "
+                "but may consume the slot normally reserved for support material."
+            )
         if newn > MAX_BAMBU_PAINT_SLOT:
             raise RuntimeError(f"Output requires {newn} slots, but Bambu paint_color supports only {MAX_BAMBU_PAINT_SLOT}")
-
-        representatives=source_slot_representatives(old,anchors,old_slot_to_new_slot,rows,newn)
-        progress(0.42,"Remapping painted facets with the Bambu paint-state codec")
-        expected_counts=expected_remapped_paint_counts(code_counts,old_slot_to_new_slot,oldn,newn)
-        patched=remap_paint_codes_by_codec(tmp, old_slot_to_new_slot, oldn, newn)
-        remapped_extruders=remap_model_setting_extruders(tmp,old_slot_to_new_slot)
-
-        progress(0.58,"Preserving source purge transitions and filament properties")
-        resize_project_filament_arrays(obj,oldn,representatives,layouts,old,newc)
-        obj["filament_colour"]=newc
-        real_profiles=[(anchor["preset"],anchor["filamentID"]) for anchor in anchors]
-        obj["filament_settings_id"]=[preset for preset,_ in real_profiles]+[MIXED_PROFILE_ID]*(newn-real_count)
-        obj["filament_ids"]=[filament_id for _,filament_id in real_profiles]+[MIXED_FILAMENT_ID]*(newn-real_count)
-        obj["filament_is_mixed"]=ism
-        obj["filament_mixed_components"]=comps
-        obj["filament_mixed_sublayer_ratios"]=ratios
-        obj["filament_multi_colour"]=newc[:]
-        for key,default in [("filament_colour_type","1"),("default_filament_colour",""),("filament_mixed_gradient","0"),("filament_mixed_gradient_per_part","0"),("filament_mixed_gradient_range",""),("filament_type","PLA"),("filament_vendor","Bambu Lab")]:
-            ensure_list(obj,key,newn,default)
-        validate_arrays(obj,newn,real_count,layouts,source_off_diagonal_zeros)
-        pspath.write_text(json.dumps(obj,indent=2,ensure_ascii=True))
         quality=quality_metrics(rows,usage,old,reference_result,mix_model)
         quality["resolvedQualityBias"]=quality_bias
         quality["qualityBiasMode"]=quality_bias_mode
+        quality["plannerMode"]=planner_mode
+        quality["planningSample"]=planning_sample
         if smart_candidates:
             quality["smartCandidates"]=smart_candidates
+        if smart_search_mode:
+            quality["smartSearchMode"]=smart_search_mode
+            quality["skippedQualityCandidates"]=skipped_quality_candidates
         printability=printability_metrics(rows,usage,real_count,newn,layouts,obj)
         mix_limit=quality_mix_limit(quality_bias)
         unmatched=[
@@ -2389,7 +3218,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             )
         recommendation=additional_anchor_recommendation(
             old,usage,anchors,palette_source,inventory,custom_catalog_path,
-            quality_bias,mix_model,quality
+            quality_bias,mix_model,quality,planner_mode,material_families
         )
         if recommendation:
             printability["recommendations"].append(
@@ -2397,12 +3226,46 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
                 f"Delta E reduction {recommendation['estimatedDeltaEReduction']:.2f} with "
                 f"{recommendation['estimatedMixedSlots']} mixed slots; {recommendation['availability']}."
             )
+        if pinned_anchor_keys:
+            warnings.append(
+                f"{len(pinned_anchor_keys)} Bambu anchor pin(s) were forced. "
+                "The planner optimized the remaining physical slots around those choices."
+            )
         if mode=="cmykw" and palette_source=="inventory":
             poor=[role for anchor,(role,target) in zip(anchors,CMYK_TARGETS)
                   if dist(anchor_color(anchor),target)>CMYKW_ROLE_WARNING_DE]
             if poor:
                 warnings.append("Approximate inventory CMYKW roles: " + ", ".join(poor) +
                                 ". Use Exact CMYKW or load closer colors for true roles.")
+        real_profiles=[(anchor["preset"],anchor["filamentID"]) for anchor in anchors]
+        if plan_only:
+            progress(1.0,"Plan preview ready. No 3MF was written.")
+            return plan_preview_payload(
+                infile,mode,palette_source,planner_mode,planning_sample,
+                catalog_region,region_label,catalog_source_label,oldn,real_count,newc,rows,
+                anchors,real_profiles,quality_bias,quality_bias_mode,quality,printability,
+                recommendation,reference_result,imported,warnings,material_families,pinned_anchor_keys
+            )
+
+        representatives=source_slot_representatives(old,anchors,old_slot_to_new_slot,rows,newn)
+        progress(0.42,"Remapping painted facets with the Bambu paint-state codec")
+        expected_counts=expected_remapped_paint_counts(code_counts,old_slot_to_new_slot,oldn,newn)
+        patched=remap_paint_codes_by_codec(tmp, old_slot_to_new_slot, oldn, newn)
+        remapped_extruders=remap_model_setting_extruders(tmp,old_slot_to_new_slot)
+
+        progress(0.58,"Preserving source purge transitions and filament properties")
+        resize_project_filament_arrays(obj,oldn,representatives,layouts,old,newc)
+        obj["filament_colour"]=newc
+        obj["filament_settings_id"]=[preset for preset,_ in real_profiles]+[MIXED_PROFILE_ID]*(newn-real_count)
+        obj["filament_ids"]=[filament_id for _,filament_id in real_profiles]+[MIXED_FILAMENT_ID]*(newn-real_count)
+        obj["filament_is_mixed"]=ism
+        obj["filament_mixed_components"]=comps
+        obj["filament_mixed_sublayer_ratios"]=ratios
+        obj["filament_multi_colour"]=newc[:]
+        for key,default in [("filament_colour_type","1"),("default_filament_colour",""),("filament_mixed_gradient","0"),("filament_mixed_gradient_per_part","0"),("filament_mixed_gradient_range",""),("filament_type","PLA"),("filament_vendor","Bambu Lab")]:
+            ensure_list(obj,key,newn,default)
+        validate_arrays(obj,newn,real_count,layouts,source_off_diagonal_zeros)
+        pspath.write_text(json.dumps(obj,indent=2,ensure_ascii=True))
 
         if staged_outfile.exists(): staged_outfile.unlink()
         progress(0.78,"Writing and reopening the new 3MF archive for validation")
@@ -2521,7 +3384,14 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             f"Remapped object/part extruder assignments: {remapped_extruders}",
             f"Palette source: {palette_source}",
             f"Catalog planning region: {region_label}",
+            f"Catalog color source: {catalog_source_label or 'not used for this palette source'}",
+            f"Material family filter: {', '.join(material_families) if material_families else 'all supported Bambu PLA families for this source'}",
+            f"Manual anchor pins: {', '.join(pinned_anchor_keys) if pinned_anchor_keys else 'none'}",
+            f"Planner mode: {planner_mode.title()}",
+            f"Planning sample: {'optimized preview mesh weighting' if planning_sample=='preview' else 'original paint-state usage'}",
             quality_line,
+            f"Smart search mode: {quality.get('smartSearchMode','manual fixed quality')}",
+            f"Skipped smart quality bands: {', '.join(map(str, quality.get('skippedQualityCandidates',[]))) if quality.get('skippedQualityCandidates') else 'none'}",
             "Mixed-color prediction: Bambu Studio FilamentMixer reconstruction",
             f"Mixed-color synchronization after reopen: Delta E {color_validation['maximumDeltaE']:.2f} (verified)",
             f"Inventory source: {'local Bambu Studio inventory selected (quantity details remain in the app only)' if inventory['source'] else 'not used for this palette source'}",
@@ -2558,28 +3428,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         progress(0.96,f"Validated and saved {outfile.name}")
         if reveal and sys.platform=="darwin":
             subprocess.run(["open","-R",str(outfile)])
-        recipes=[]
-        for old_slot,new_slot,target,kind,label,component_ids,ratio_text,preview,error,direct_error,gain in rows:
-            available_grams=None
-            if kind=="MIX" and all(anchors[int(value)-1]["remainingGrams"] is not None for value in component_ids.split(",")):
-                component_slots=[int(value) for value in component_ids.split(",")]
-                component_ratios=[float(value) for value in ratio_text.split(",")]
-                available_grams=round(min(anchors[slot-1]["remainingGrams"]/ratio
-                                          for slot,ratio in zip(component_slots,component_ratios)),1)
-            recipes.append({
-                "oldSlot":old_slot,
-                "newSlot":new_slot,
-                "targetColor":target,
-                "kind":kind,
-                "label":label or f"Mixed slot {new_slot}",
-                "components":component_ids,
-                "ratios":ratio_text,
-                "preview":preview,
-                "deltaE":float(error),
-                "directDeltaE":float(direct_error),
-                "visualGain":float(gain),
-                "availableGrams":available_grams,
-            })
+        recipes=recipe_items_from_rows(rows,anchors)
         progress(1.0,"Output validated and ready to open in Bambu Studio")
         return {
             "input":str(infile),
@@ -2589,8 +3438,13 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "colorValidationReport":str(color_report),
             "mode":mode,
             "paletteSource":palette_source,
+            "plannerMode":planner_mode,
+            "planningSample":planning_sample,
             "catalogRegion":catalog_region,
             "catalogRegionLabel":region_label,
+            "catalogSource":catalog_source_label,
+            "materialFamilies":material_families,
+            "pinnedAnchorKeys":pinned_anchor_keys,
             "sourceSlots":oldn,
             "realSlots":real_count,
             "outputSlots":newn,
@@ -2610,8 +3464,10 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "inventory":inventory,
             "anchors":[
                 {
+                    "key":anchor_key(anchor),
                     "slot":i+1,
                     "name":anchor_name(anchor),
+                    "series":str(anchor.get("series") or filament_family(anchor_name(anchor))).strip(),
                     "color":anchor_color(anchor),
                     "preset":real_profiles[i][0],
                     "filamentID":real_profiles[i][1],
@@ -2633,13 +3489,23 @@ def main():
     parser.add_argument("infile",nargs="?")
     parser.add_argument("--mode",choices=["official","cmykw"])
     parser.add_argument("--palette-source",choices=["inventory","catalog","all-bambu","custom","exact-cmykw"],default="inventory")
-    parser.add_argument("--real-slots",choices=["auto","2","3","4","5","6"],default="auto")
+    parser.add_argument("--real-slots",choices=["auto","2","3","4","5","6","7","8"],default="auto")
     parser.add_argument("--reference",help="Optional OBJ, GLB or texture image used as a visual reference")
     parser.add_argument("--custom-palette",help="JSON filament library for --palette-source custom")
     parser.add_argument("--quality-bias",default=str(DEFAULT_QUALITY_BIAS),
                         help="Quality versus waste priority from 0-100, or auto for smart planning")
     parser.add_argument("--mix-model",choices=MIX_MODELS,default="bambu",
                         help="Mixed-color model used for planning, export and preview")
+    parser.add_argument("--planner-mode",choices=PLANNER_MODES,default="best",
+                        help="best uses deeper anchor/mix search; fast keeps the previous quicker planner")
+    parser.add_argument("--planning-sample",choices=PLANNING_SAMPLES,default="paint",
+                        help="paint uses original paint-state usage; preview weights planning by the optimized viewport mesh")
+    parser.add_argument("--plan-preview",action="store_true",
+                        help="Run palette planning with the selected options and return JSON without writing a 3MF")
+    parser.add_argument("--material-families",
+                        help="Comma-separated Bambu PLA families to allow, for example 'PLA Basic,PLA Matte,PLA Pure'")
+    parser.add_argument("--anchors",
+                        help="Comma-separated Bambu anchor keys to pin, for example 'PLA Basic|#000000,PLA Matte|#FFFFFF'")
     parser.add_argument("--catalog-region",choices=sorted(CATALOG_REGIONS),default="global",
                         help="Planning market shown in catalog warnings and reports")
     parser.add_argument("--analysis-dir",help="Optional local destination for heatmap and anchor-influence preview meshes")
@@ -2659,7 +3525,7 @@ def main():
 
     try:
         if args.inventory:
-            result=read_bambu_inventory()
+            result=read_bambu_inventory(required=False)
         else:
             infile=Path(args.infile).expanduser() if args.infile else choose_file()
             if not infile or not infile.exists():
@@ -2699,6 +3565,11 @@ def main():
                     texture_override=args.texture,
                     internal_colors=args.internal_colors,
                     catalog_region=args.catalog_region,
+                    planner_mode=args.planner_mode,
+                    planning_sample=args.planning_sample,
+                    plan_only=args.plan_preview,
+                    material_families=args.material_families,
+                    pinned_anchor_keys=args.anchors,
                     progress=reporter,
                 )
         if args.json_output:

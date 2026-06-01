@@ -6,8 +6,8 @@ APP_NAME="FullSpectrum Studio"
 EXECUTABLE_NAME="FullSpectrumStudio"
 BUNDLE_ID="studio.fullspectrum.macos"
 MIN_SYSTEM_VERSION="14.0"
-APP_VERSION="${FULLSPECTRUM_VERSION:-0.4.9}"
-APP_BUILD="${FULLSPECTRUM_BUILD:-11}"
+APP_VERSION="${FULLSPECTRUM_VERSION:-0.4.12}"
+APP_BUILD="${FULLSPECTRUM_BUILD:-14}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
@@ -21,10 +21,33 @@ INFO_PLIST="$APP_CONTENTS/Info.plist"
 pkill -x "$EXECUTABLE_NAME" >/dev/null 2>&1 || true
 
 scrub_bundle_metadata() {
+  [[ -d "$APP_BUNDLE" ]] || return 0
+  while IFS= read -r -d '' entry; do
+    /usr/bin/xattr -c "$entry" >/dev/null 2>&1 || true
+    /usr/bin/xattr -d 'com.apple.fileprovider.fpfs#P' "$entry" >/dev/null 2>&1 || true
+    /usr/bin/xattr -d com.apple.FinderInfo "$entry" >/dev/null 2>&1 || true
+    /usr/bin/xattr -d com.apple.macl "$entry" >/dev/null 2>&1 || true
+  done < <(/usr/bin/find "$APP_BUNDLE" -mindepth 1 -print0)
   /usr/bin/xattr -cr "$APP_BUNDLE" >/dev/null 2>&1 || true
-  /usr/bin/xattr -d com.apple.FinderInfo "$APP_BUNDLE" >/dev/null 2>&1 || true
+  /usr/bin/xattr -c "$APP_BUNDLE" >/dev/null 2>&1 || true
   /usr/bin/xattr -d 'com.apple.fileprovider.fpfs#P' "$APP_BUNDLE" >/dev/null 2>&1 || true
+  /usr/bin/xattr -d com.apple.FinderInfo "$APP_BUNDLE" >/dev/null 2>&1 || true
   /usr/bin/xattr -d com.apple.macl "$APP_BUNDLE" >/dev/null 2>&1 || true
+}
+
+sign_bundle() {
+  local signed=0
+  for _ in 1 2 3; do
+    scrub_bundle_metadata
+    if /usr/bin/codesign --force --deep --sign - --timestamp=none "$APP_BUNDLE"; then
+      signed=1
+      break
+    fi
+    sleep 1
+  done
+  if [[ "$signed" != "1" ]]; then
+    exit 1
+  fi
 }
 
 cd "$ROOT_DIR"
@@ -63,7 +86,7 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundleVersion</key>
   <string>$APP_BUILD</string>
   <key>CFBundleGetInfoString</key>
-  <string>Official Release - validated local reduced-filament workflow</string>
+  <string>macOS H2C adaptive planner prerelease</string>
   <key>LSMinimumSystemVersion</key>
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
@@ -91,9 +114,10 @@ PLIST
 
 # Seal the completed bundle after all resources have been copied. This is an
 # ad-hoc signature for community downloads, not Developer ID notarization.
+sign_bundle
+# Some local folders attach Finder/FileProvider metadata immediately after a
+# bundle is written or signed. Remove it again before strict verification.
 scrub_bundle_metadata
-/usr/bin/codesign --force --deep --sign - --timestamp=none "$APP_BUNDLE"
-/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
@@ -116,7 +140,6 @@ strict_verify_bundle() {
 
 case "$MODE" in
   build|--build)
-    sleep 1
     strict_verify_bundle
     echo "$APP_NAME built at $APP_BUNDLE."
     ;;

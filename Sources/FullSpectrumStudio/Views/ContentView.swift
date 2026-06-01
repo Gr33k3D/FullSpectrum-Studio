@@ -58,6 +58,11 @@ struct ContentView: View {
                 }
                 .animation(.easeOut(duration: 0.18), value: sidebarVisible)
                 .padding(24)
+
+                VersionCornerBadge()
+                    .padding(18)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .allowsHitTesting(false)
             }
         }
         .onOpenURL { url in
@@ -91,6 +96,34 @@ struct ContentView: View {
     }
 }
 
+private struct VersionCornerBadge: View {
+    private var versionText: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let version = info["CFBundleShortVersionString"] as? String ?? "dev"
+        let build = info["CFBundleVersion"] as? String
+        let infoString = (info["CFBundleGetInfoString"] as? String ?? "").lowercased()
+        let suffix = infoString.contains("local") ? " local" : ""
+        if let build, !build.isEmpty {
+            return "v\(version) (\(build))\(suffix)"
+        }
+        return "v\(version)\(suffix)"
+    }
+
+    var body: some View {
+        Text(versionText)
+            .font(.caption2.monospacedDigit().weight(.semibold))
+            .foregroundStyle(.white.opacity(0.58))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.34), in: Capsule())
+            .overlay {
+                Capsule().stroke(.white.opacity(0.08), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+            .accessibilityLabel("Version \(versionText)")
+    }
+}
+
 private struct ActivityPanel: View {
     @EnvironmentObject private var store: StudioStore
     @Binding var isExpanded: Bool
@@ -98,10 +131,19 @@ private struct ActivityPanel: View {
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             VStack(alignment: .leading, spacing: 7) {
-                Text(store.progressMessage)
+                Label(store.timingMessage, systemImage: "clock")
+                    .foregroundStyle(.cyan.opacity(0.76))
                     .textSelection(.enabled)
+                ForEach(Array(store.activityMessages.reversed().enumerated()), id: \.offset) { _, message in
+                    Text(message)
+                        .textSelection(.enabled)
+                }
                 if let notice = store.inspection?.previewNotice {
                     Text(notice)
+                }
+                if let preview = store.planPreview {
+                    Text("Plan preview: \(preview.realSlots) physical + \(preview.outputSlots - preview.realSlots) mixed slots. No output file written.")
+                        .foregroundStyle(.cyan.opacity(0.74))
                 }
                 ForEach(store.result?.warnings ?? [], id: \.self) { warning in
                     Text(warning).foregroundStyle(.orange.opacity(0.9))
@@ -190,23 +232,23 @@ private struct HeaderView: View {
             Spacer()
 
             StatusPill(
-                title: store.result == nil ? ((store.isWorking || store.isBuildingPreview) ? "Processing" : "Ready") : "Validated",
-                icon: store.result == nil ? ((store.isWorking || store.isBuildingPreview) ? "sparkles" : "circle.dotted") : "checkmark.seal.fill",
+                title: store.result == nil ? ((store.isWorking || store.isPlanningPreview || store.isBuildingPreview) ? "Processing" : "Ready") : "Validated",
+                icon: store.result == nil ? ((store.isWorking || store.isPlanningPreview || store.isBuildingPreview) ? "sparkles" : "circle.dotted") : "checkmark.seal.fill",
                 tint: store.result == nil ? .cyan : .green
             )
 
-            if store.isWorking || store.isBuildingPreview {
+            if store.isWorking || store.isPlanningPreview || store.isBuildingPreview {
                 Button {
                     store.cancelActiveOperation()
                 } label: {
                     if compact {
                         Image(systemName: "xmark.circle.fill")
                     } else {
-                        Label(store.isWorking ? "Cancel" : "Stop Preview", systemImage: "xmark.circle.fill")
+                        Label(store.isBuildingPreview ? "Stop Preview" : "Cancel", systemImage: "xmark.circle.fill")
                     }
                 }
                 .buttonStyle(StudioButtonStyle(prominent: false, tint: .red))
-                .help(store.isWorking ? "Terminate the active Python conversion process" : "Stop the optional preview build")
+                .help(store.isBuildingPreview ? "Stop the optional preview build" : "Terminate the active Python planner process")
             }
 
             Button {

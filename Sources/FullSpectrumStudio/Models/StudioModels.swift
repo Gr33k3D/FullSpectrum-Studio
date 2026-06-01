@@ -80,9 +80,64 @@ enum RealSlotSelection: String, CaseIterable, Identifiable {
     case four = "4"
     case five = "5"
     case six = "6"
+    case seven = "7"
+    case eight = "8"
 
     var id: Self { self }
-    var title: String { self == .auto ? "Auto 2-6" : rawValue }
+    var title: String {
+        switch self {
+        case .auto: return "Auto 2-6"
+        case .seven: return "7 exp"
+        case .eight: return "8 exp"
+        default: return rawValue
+        }
+    }
+}
+
+enum PlannerMode: String, CaseIterable, Identifiable {
+    case best
+    case fast
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .best: return "Best"
+        case .fast: return "Fast"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .best:
+            return "Deep search with wider anchor beams, swap refinement, and dense 2/3-color Bambu mix ratios. Can take minutes on complex files."
+        case .fast:
+            return "Uses the previous quicker anchor planner and smaller ratio set for fast previews or troubleshooting."
+        }
+    }
+}
+
+enum PlanningSample: String, CaseIterable, Identifiable {
+    case paint = "paint"
+    case preview = "preview"
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .paint: return "Paint states"
+        case .preview: return "Render preview"
+        }
+    }
+
+    var explanation: String {
+        switch self {
+        case .paint:
+            return "Weights planning from the original Bambu paint-state counts."
+        case .preview:
+            return "Weights planning from the optimized render preview, then exports by exact original paint states."
+        }
+    }
 }
 
 enum MixPrediction: String, CaseIterable, Identifiable {
@@ -133,7 +188,31 @@ struct InventorySnapshot: Decodable {
     let allCount: Int
     let usableCount: Int
     let totalGrams: Double
+    let catalog: CatalogSnapshot?
+    let anchorOptions: [AnchorCandidate]?
     let spools: [InventorySpool]
+}
+
+struct CatalogSnapshot: Decodable {
+    let source: String?
+    let bambuStudio: BambuStudioInstallSnapshot?
+    let totalRows: Int
+    let coreUsableCount: Int
+    let allUsableCount: Int
+    let families: [CatalogFamilyCount]
+}
+
+struct BambuStudioInstallSnapshot: Decodable {
+    let version: String?
+    let build: String?
+    let path: String?
+}
+
+struct CatalogFamilyCount: Decodable, Identifiable {
+    let series: String
+    let count: Int
+
+    var id: String { series }
 }
 
 struct InventorySpool: Decodable, Identifiable {
@@ -147,6 +226,21 @@ struct InventorySpool: Decodable, Identifiable {
     let initialGrams: Double
 
     var id: String { "\(series)-\(color)-\(remainingGrams)" }
+}
+
+struct AnchorCandidate: Decodable, Identifiable, Hashable {
+    let key: String
+    let name: String
+    let series: String
+    let brand: String
+    let color: String
+    let preset: String
+    let filamentID: String
+    let remainingGrams: Double?
+    let availability: String?
+    let catalogSource: String?
+
+    var id: String { key }
 }
 
 struct ProjectInspection: Decodable {
@@ -180,8 +274,13 @@ struct ConversionResult: Decodable {
     let colorValidationReport: String
     let mode: String
     let paletteSource: String
+    let plannerMode: String?
+    let planningSample: String?
     let catalogRegion: String?
     let catalogRegionLabel: String?
+    let catalogSource: String?
+    let materialFamilies: [String]?
+    let pinnedAnchorKeys: [String]?
     let sourceSlots: Int
     let realSlots: Int
     let outputSlots: Int
@@ -200,6 +299,38 @@ struct ConversionResult: Decodable {
     let analysisAssets: AnalysisAssets?
     let `import`: ImportSummary?
     let recommendation: AnchorRecommendation?
+    let warnings: [String]
+
+    var mixedRecipes: [RecipeItem] {
+        recipes.filter { $0.kind == "MIX" }
+    }
+}
+
+struct PlanPreviewResult: Decodable {
+    let type: String
+    let input: String
+    let filename: String
+    let mode: String
+    let paletteSource: String
+    let plannerMode: String
+    let planningSample: String
+    let catalogRegion: String?
+    let catalogRegionLabel: String?
+    let catalogSource: String?
+    let materialFamilies: [String]?
+    let pinnedAnchorKeys: [String]?
+    let sourceSlots: Int
+    let realSlots: Int
+    let outputSlots: Int
+    let qualityBias: Int
+    let qualityBiasMode: String
+    let anchors: [AnchorFilament]
+    let recipes: [RecipeItem]
+    let quality: QualityMetrics
+    let printability: PrintabilityMetrics
+    let recommendation: AnchorRecommendation?
+    let reference: ReferenceSummary?
+    let `import`: ImportSummary?
     let warnings: [String]
 
     var mixedRecipes: [RecipeItem] {
@@ -242,6 +373,8 @@ struct QualityMetrics: Decodable {
     let mixModel: String
     let resolvedQualityBias: Int?
     let qualityBiasMode: String?
+    let plannerMode: String?
+    let planningSample: String?
 }
 
 struct PrintabilityMetrics: Decodable {
@@ -281,7 +414,9 @@ struct ImportSummary: Decodable {
 }
 
 struct AnchorRecommendation: Decodable {
+    let key: String?
     let name: String
+    let series: String?
     let color: String
     let estimatedDeltaEReduction: Double
     let estimatedQualityScore: Double
@@ -303,14 +438,16 @@ struct ReferenceColor: Decodable, Identifiable {
 }
 
 struct AnchorFilament: Decodable, Identifiable {
+    let key: String?
     let slot: Int
     let name: String
+    let series: String?
     let color: String
     let preset: String
     let filamentID: String
     let remainingGrams: Double?
 
-    var id: Int { slot }
+    var id: String { key ?? "\(slot)-\(name)-\(color)" }
 }
 
 struct RecipeItem: Decodable, Identifiable {

@@ -117,6 +117,10 @@ struct ConverterService {
         textureOverride: URL?,
         qualityBias: String,
         catalogRegion: CatalogRegion,
+        plannerMode: PlannerMode,
+        planningSample: PlanningSample,
+        materialFamilies: [String],
+        pinnedAnchorKeys: [String],
         mixPrediction: MixPrediction,
         outputDirectory: URL,
         progress: @escaping @Sendable (Double, String) -> Void
@@ -130,6 +134,8 @@ struct ConverterService {
                 "--real-slots", realSlots.rawValue,
                 "--quality-bias", qualityBias,
                 "--catalog-region", catalogRegion.rawValue,
+                "--planner-mode", plannerMode.rawValue,
+                "--planning-sample", planningSample.rawValue,
                 "--mix-model", mixPrediction.rawValue,
                 "--analysis-dir", analysisDirectory.path,
                 "--output-dir", outputDirectory.path,
@@ -145,9 +151,70 @@ struct ConverterService {
         if let textureOverride {
             arguments.insert(contentsOf: ["--texture", textureOverride.path], at: arguments.count - 1)
         }
+        if !materialFamilies.isEmpty {
+            arguments.insert(contentsOf: ["--material-families", materialFamilies.joined(separator: ",")], at: arguments.count - 1)
+        }
+        if !pinnedAnchorKeys.isEmpty {
+            arguments.insert(contentsOf: ["--anchors", pinnedAnchorKeys.joined(separator: ",")], at: arguments.count - 1)
+        }
         return try await execute(
             arguments: arguments,
             type: ConversionResult.self,
+            progress: progress
+        )
+    }
+
+    func planPreview(
+        file: URL,
+        mode: PaletteMode,
+        paletteSource: PaletteSource,
+        realSlots: RealSlotSelection,
+        reference: URL?,
+        customPalette: URL?,
+        textureOverride: URL?,
+        qualityBias: String,
+        catalogRegion: CatalogRegion,
+        plannerMode: PlannerMode,
+        planningSample: PlanningSample,
+        materialFamilies: [String],
+        pinnedAnchorKeys: [String],
+        mixPrediction: MixPrediction,
+        outputDirectory: URL,
+        progress: @escaping @Sendable (Double, String) -> Void
+    ) async throws -> PlanPreviewResult {
+        var arguments = [
+                "--json",
+                "--plan-preview",
+                "--mode", mode.rawValue,
+                "--palette-source", paletteSource.rawValue,
+                "--real-slots", realSlots.rawValue,
+                "--quality-bias", qualityBias,
+                "--catalog-region", catalogRegion.rawValue,
+                "--planner-mode", plannerMode.rawValue,
+                "--planning-sample", planningSample.rawValue,
+                "--mix-model", mixPrediction.rawValue,
+                "--output-dir", outputDirectory.path,
+                "--no-reveal",
+                file.path
+            ]
+        if let reference {
+            arguments.insert(contentsOf: ["--reference", reference.path], at: arguments.count - 1)
+        }
+        if let customPalette {
+            arguments.insert(contentsOf: ["--custom-palette", customPalette.path], at: arguments.count - 1)
+        }
+        if let textureOverride {
+            arguments.insert(contentsOf: ["--texture", textureOverride.path], at: arguments.count - 1)
+        }
+        if !materialFamilies.isEmpty {
+            arguments.insert(contentsOf: ["--material-families", materialFamilies.joined(separator: ",")], at: arguments.count - 1)
+        }
+        if !pinnedAnchorKeys.isEmpty {
+            arguments.insert(contentsOf: ["--anchors", pinnedAnchorKeys.joined(separator: ",")], at: arguments.count - 1)
+        }
+        return try await execute(
+            arguments: arguments,
+            type: PlanPreviewResult.self,
             progress: progress
         )
     }

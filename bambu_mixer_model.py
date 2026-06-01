@@ -1,5 +1,14 @@
 """Bambu Studio compatible mixed-filament swatch reconstruction.
 
+FullSpectrum's generated mixed slots are 3D halftones: Bambu stores physical
+component slots plus sublayer ratios, and the printed surface is perceived as
+the optical average of those alternating layers. This module does not implement
+a separate Yule-Nielsen reflectance equation. It mirrors Bambu Studio's loaded
+swatch model so FullSpectrum's preview, exported `filament_colour`, and Bambu's
+reopened color agree. Physical calibration corrections for opacity,
+dark/light interaction, saturation loss, or hue drift should be fitted from
+measured prints before being added on top of this reconstruction.
+
 The polynomial coefficients below are a compact representation of
 `FilamentMixerModel.hpp` in BambuStudio. The upstream mixer is MIT licensed:
 

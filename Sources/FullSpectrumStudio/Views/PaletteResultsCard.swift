@@ -7,7 +7,7 @@ struct PaletteResultsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(store.result == nil ? "OUTPUT PALETTE" : "VALIDATED PALETTE")
+                Text(store.result == nil ? (store.planPreview == nil ? "OUTPUT PALETTE" : "PLAN PREVIEW") : "VALIDATED PALETTE")
                     .font(.caption.weight(.bold))
                     .tracking(1.2)
                     .foregroundStyle(.white.opacity(0.5))
@@ -16,6 +16,10 @@ struct PaletteResultsCard: View {
                     Text("\(result.realSlots) real + \(result.outputSlots - result.realSlots) mixed")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.green.opacity(0.9))
+                } else if let preview = store.planPreview {
+                    Text("\(preview.realSlots) real + \(preview.outputSlots - preview.realSlots) mixed")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.cyan.opacity(0.9))
                 }
             }
 
@@ -115,6 +119,8 @@ struct PaletteResultsCard: View {
                         .font(.caption2)
                         .foregroundStyle(.orange.opacity(0.8))
                 }
+            } else if let preview = store.planPreview {
+                PlanPreviewDetails(preview: preview)
             } else {
                 EmptyResultsPanel()
             }
@@ -122,6 +128,72 @@ struct PaletteResultsCard: View {
         .padding(17)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(CardSurface())
+    }
+}
+
+private struct PlanPreviewDetails: View {
+    let preview: PlanPreviewResult
+
+    var body: some View {
+        AnchorGrid(anchors: preview.anchors, paletteSource: preview.paletteSource)
+
+        Divider().overlay(.white.opacity(0.1))
+
+        HStack(spacing: 18) {
+            MetricChip(title: "QUALITY", value: String(format: "%.0f / 100", preview.quality.qualityScore))
+            MetricChip(title: "MEAN ERROR", value: String(format: "dE %.1f", preview.quality.estimatedDeltaE))
+            MetricChip(title: "CONFIDENCE", value: String(format: "%.0f / 100", preview.quality.confidenceScore))
+        }
+        HStack(spacing: 18) {
+            if let contrast = preview.quality.contrastRetention {
+                MetricChip(title: "CONTRAST", value: String(format: "%.0f%%", contrast))
+            }
+            MetricChip(title: "MIXED PAINT", value: String(format: "%.0f%%", preview.printability.paintedMixedShare))
+            MetricChip(title: "SAMPLE", value: preview.planningSample == PlanningSample.preview.rawValue ? "Preview" : "Paint")
+        }
+
+        Label("Dry plan only. No 3MF was written yet.", systemImage: "eye")
+            .font(.caption)
+            .foregroundStyle(.cyan.opacity(0.78))
+        Text("Uses the current palette strategy, planner, filament source, slot count, quality setting, reference and planning sample.")
+            .font(.caption2)
+            .foregroundStyle(.white.opacity(0.48))
+            .fixedSize(horizontal: false, vertical: true)
+
+        Label("\(preview.printability.difficulty) printability complexity; actual time and material require slicing", systemImage: "printer")
+            .font(.caption)
+            .foregroundStyle(.cyan.opacity(0.76))
+        ForEach(preview.printability.recommendations, id: \.self) { recommendation in
+            Text("Suggestion: \(recommendation)")
+                .font(.caption)
+                .foregroundStyle(.cyan.opacity(0.76))
+        }
+        if let next = preview.recommendation {
+            HStack(spacing: 8) {
+                Circle().fill(Color(hex: next.color)).frame(width: 14, height: 14)
+                Text("Possible next anchor: \(next.name) could reduce estimated error by \(String(format: "%.1f", next.estimatedDeltaEReduction)) dE")
+            }
+            .font(.caption)
+            .foregroundStyle(.cyan.opacity(0.84))
+        }
+        ForEach(preview.warnings, id: \.self) { warning in
+            Text(warning)
+                .font(.caption)
+                .foregroundStyle(.orange.opacity(0.9))
+        }
+
+        Text("MIXED RECIPES")
+            .font(.caption2.weight(.bold))
+            .tracking(0.8)
+            .foregroundStyle(.white.opacity(0.42))
+
+        ScrollView {
+            LazyVStack(spacing: 7) {
+                ForEach(preview.mixedRecipes) { recipe in
+                    RecipeRow(recipe: recipe, anchors: preview.anchors)
+                }
+            }
+        }
     }
 }
 

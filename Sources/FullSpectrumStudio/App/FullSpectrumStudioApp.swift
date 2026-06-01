@@ -28,11 +28,17 @@ struct FullSpectrumStudioApp: App {
                 .keyboardShortcut("o")
             }
             CommandMenu("Conversion") {
+                Button("Preview Plan") {
+                    store.previewPlan()
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+                .disabled(store.selectedFile == nil || store.isWorking || store.isPlanningPreview || store.isBuildingPreview)
+
                 Button("Convert Project") {
                     store.convert()
                 }
                 .keyboardShortcut("r")
-                .disabled(store.selectedFile == nil || store.isWorking)
+                .disabled(store.selectedFile == nil || store.isWorking || store.isPlanningPreview)
 
                 Button("Reveal Output") {
                     store.revealOutput()

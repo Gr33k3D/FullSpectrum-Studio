@@ -383,6 +383,32 @@ class ConversionTests(unittest.TestCase):
                                            if not line.startswith("mtllib "))
             self.assertEqual(heat_geometry, influence_geometry)
 
+    def test_plan_preview_uses_preview_weighting_without_writing_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            write_project(source)
+            with zipfile.ZipFile(source) as archive:
+                self.assertEqual(ENGINE.preview_slot_usage(archive, 4), {2: 1})
+            output = ENGINE.convert(
+                source,
+                "official",
+                "catalog",
+                folder,
+                False,
+                "2",
+                planner_mode="fast",
+                planning_sample="preview",
+                plan_only=True,
+            )
+            self.assertEqual(output["type"], "planPreview")
+            self.assertEqual(output["planningSample"], "preview")
+            self.assertEqual(output["realSlots"], 2)
+            self.assertIn("quality", output)
+            self.assertIn("recipes", output)
+            self.assertTrue(any("preview-mesh color weighting" in warning for warning in output["warnings"]))
+            generated = list(Path(folder).glob("*FullSpectrum*.3mf"))
+            self.assertEqual(generated, [])
+
     def test_metadata_only_inspection_avoids_mesh_scan_and_preview_build(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.3mf"
@@ -436,9 +462,46 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(len(palette[0]),3)
         self.assertEqual(palette[4][1],palette[4][2])
 
+    def test_anchor_score_hint_database_reuses_bambu_mix_recipes(self):
+        ENGINE.anchor_score_hint_database.cache_clear()
+        target=ENGINE.mix(["#000000","#FFFFFF"],[0.5,0.5])
+        hints=ENGINE.anchor_score_hint_database(
+            ("#000000","#FFFFFF","#FF0000"),
+            (target,),
+            "bambu",
+            "fine2",
+            "standard3",
+            14.0,
+        )
+        self.assertTrue(
+            any(set(components)=={"#000000","#FFFFFF"} and error < 0.1
+                for components,error in hints[0])
+        )
+        before=ENGINE.anchor_score_hint_database.cache_info()
+        ENGINE.anchor_score_hint_database(
+            ("#000000","#FFFFFF","#FF0000"),
+            (target,),
+            "bambu",
+            "fine2",
+            "standard3",
+            14.0,
+        )
+        after=ENGINE.anchor_score_hint_database.cache_info()
+        self.assertEqual(after.hits,before.hits+1)
+
     def test_quality_mix_limit_is_conservative_until_quality_is_raised(self):
         self.assertEqual(ENGINE.quality_mix_limit(60),ENGINE.MAX_RELIABLE_MIX_DE)
         self.assertEqual(ENGINE.quality_mix_limit(100),ENGINE.MAX_HIGH_QUALITY_MIX_DE)
+
+    def test_best_planner_searches_denser_mix_ratios_than_fast(self):
+        anchors=[
+            {"name":"Black","color":"#000000"},
+            {"name":"White","color":"#FFFFFF"},
+        ]
+        target=ENGINE.mix(["#000000","#FFFFFF"],[0.2,0.8])
+        fast=ENGINE.build_palette([target],anchors,{1:100},100,planner_mode="fast")[-1][0]
+        best=ENGINE.build_palette([target],anchors,{1:100},100,planner_mode="best")[-1][0]
+        self.assertLessEqual(float(best[8]),float(fast[8]))
 
     def test_smart_quality_bias_runs_multiple_plans_and_reports_selected_value(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -452,12 +515,18 @@ class ConversionTests(unittest.TestCase):
                 False,
                 "auto",
                 quality_bias="auto",
+                planner_mode="fast",
             )
             self.assertEqual(output["qualityBiasMode"], "auto")
+            self.assertEqual(output["plannerMode"], "fast")
             self.assertIn(output["qualityBias"], ENGINE.SMART_QUALITY_CANDIDATES)
             self.assertEqual(output["quality"]["resolvedQualityBias"], output["qualityBias"])
-            self.assertGreaterEqual(len(output["quality"].get("smartCandidates", [])), 2)
+            self.assertEqual(output["quality"]["plannerMode"], "fast")
+            self.assertEqual(output["quality"]["smartSearchMode"], "adaptive-spectrum")
+            self.assertGreaterEqual(len(output["quality"].get("smartCandidates", [])), 1)
+            self.assertIn("skippedQualityCandidates", output["quality"])
             self.assertIn("Smart auto selected", Path(output["report"]).read_text())
+            self.assertIn("Planner mode: Fast", Path(output["report"]).read_text())
 
     def test_catalog_region_is_visible_in_outputs_and_reports(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -471,6 +540,7 @@ class ConversionTests(unittest.TestCase):
                 False,
                 "2",
                 catalog_region="eu",
+                planner_mode="fast",
             )
             self.assertEqual(output["catalogRegion"], "eu")
             self.assertEqual(output["catalogRegionLabel"], "Europe")
@@ -491,6 +561,40 @@ class ConversionTests(unittest.TestCase):
                     "2",
                     catalog_region="mars",
                 )
+
+    def test_official_strategy_allows_experimental_extra_physical_slots(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            write_project(source)
+            output = ENGINE.convert(
+                source,
+                "official",
+                "catalog",
+                folder,
+                False,
+                "7",
+                quality_bias=100,
+                planner_mode="fast",
+            )
+            self.assertEqual(output["realSlots"], 7)
+            self.assertEqual(output["validation"], "OK")
+            self.assertTrue(any("Experimental 7-physical-slot" in warning for warning in output["warnings"]))
+
+    def test_auto_real_slots_keeps_support_slot_available(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            write_project(source)
+            output = ENGINE.convert(
+                source,
+                "official",
+                "catalog",
+                folder,
+                False,
+                "auto",
+                quality_bias=100,
+                planner_mode="fast",
+            )
+            self.assertLessEqual(output["realSlots"], ENGINE.DEFAULT_AUTO_MAX_REAL_SLOTS)
 
     def test_anchor_selection_keeps_mix_parent_colors_when_they_improve_output(self):
         with tempfile.TemporaryDirectory() as folder_name:
@@ -525,7 +629,7 @@ class ConversionTests(unittest.TestCase):
             {"name":"Black","color":"#000000"},
             {"name":"Pink","color":"#BA9594"},
         ]
-        palette=ENGINE.build_palette(["#335599"],anchors,{1:100},100)
+        palette=ENGINE.build_palette(["#335599"],anchors,{1:100},100,planner_mode="fast")
         self.assertEqual(len(palette[0]),2)
         self.assertEqual(palette[5][0][3],"ANCHOR")
 
@@ -557,6 +661,74 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(ENGINE.filament_family("PLA Matte Desert Tan"),"PLA Matte")
         self.assertEqual(ENGINE.official_filament_name("PLA Matte","#E8DBB7"),"PLA Matte Desert Tan")
         self.assertEqual(ENGINE.official_filament_name("PLA Basic","#000000"),"PLA Basic Black")
+
+    def test_catalog_palette_reads_bambu_studio_color_codes_when_available(self):
+        source, rows = ENGINE.bambu_studio_catalog_rows()
+        if not rows:
+            self.skipTest("Bambu Studio catalog is not installed on this machine")
+        palette = ENGINE.catalog_palette("core")
+        by_name = {item["name"]: item for item in palette}
+        self.assertIn("PLA Basic Cyan", by_name)
+        self.assertEqual(by_name["PLA Basic Cyan"]["color"], "#0086D6")
+        self.assertEqual(by_name["PLA Basic Cyan"]["filamentID"], "GFA00")
+        self.assertEqual(by_name["PLA Basic Cyan"]["catalogSource"], source)
+        self.assertNotIn("PLA Basic Arctic Whisper", by_name)
+
+    def test_catalog_summary_reports_official_source_counts(self):
+        summary = ENGINE.catalog_summary()
+        self.assertIn("source", summary)
+        self.assertGreater(summary["totalRows"], 0)
+        self.assertGreater(summary["coreUsableCount"], 0)
+        self.assertGreaterEqual(summary["allUsableCount"], summary["coreUsableCount"])
+        self.assertTrue(any(item["series"] == "PLA Basic" for item in summary["families"]))
+
+    def test_material_filter_and_pinned_anchor_constrain_selection(self):
+        inventory = {
+            "spools": [
+                {
+                    "name": "PLA Basic Black",
+                    "series": "PLA Basic",
+                    "brand": "Bambu Lab",
+                    "color": "#000000",
+                    "preset": "Bambu PLA Basic @BBL H2C 0.2 nozzle",
+                    "filamentID": "GFA00",
+                    "remainingGrams": 1000,
+                    "initialGrams": 1000,
+                },
+                {
+                    "name": "PLA Basic White",
+                    "series": "PLA Basic",
+                    "brand": "Bambu Lab",
+                    "color": "#FFFFFF",
+                    "preset": "Bambu PLA Basic @BBL H2C 0.2 nozzle",
+                    "filamentID": "GFA00",
+                    "remainingGrams": 1000,
+                    "initialGrams": 1000,
+                },
+                {
+                    "name": "PLA Matte Scarlet Red",
+                    "series": "PLA Matte",
+                    "brand": "Bambu Lab",
+                    "color": "#D32941",
+                    "preset": "Bambu PLA Matte @BBL H2C 0.2 nozzle",
+                    "filamentID": "GFA01",
+                    "remainingGrams": 1000,
+                    "initialGrams": 1000,
+                },
+            ]
+        }
+        anchors = ENGINE.select_anchors(
+            ["#111111", "#F7F7F7", "#D32941"],
+            {1: 80, 2: 40, 3: 20},
+            "official",
+            inventory,
+            "inventory",
+            "2",
+            material_families="PLA Basic",
+            pinned_anchor_keys="PLA Basic|#000000",
+        )
+        self.assertEqual(ENGINE.anchor_key(anchors[0]), "PLA Basic|#000000")
+        self.assertTrue(all(anchor["series"] == "PLA Basic" for anchor in anchors))
 
     def test_textured_obj_import_runs_through_validated_output(self):
         with tempfile.TemporaryDirectory() as folder_name:

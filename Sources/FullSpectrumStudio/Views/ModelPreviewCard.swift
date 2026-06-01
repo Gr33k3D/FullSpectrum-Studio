@@ -6,18 +6,19 @@ struct ModelPreviewCard: View {
     @State private var isTargeted = false
     @State private var cameraResetToken = 0
     @State private var isFullScreen = false
+    @AppStorage("wastePreviewDisplayScale") private var wastePreviewDisplayScale = 0.7
     var compact = false
 
     private var activeMeshURL: URL? {
         switch store.previewMode {
         case .plateImage:
-            return store.previewImage == nil ? store.previewMeshURL : nil
+            return nil
         case .predicted, .validation:
-            return store.outputPreviewMeshURL ?? store.previewMeshURL
+            return store.outputPreviewMeshURL
         case .colorLoss:
-            return store.heatmapMeshURL ?? store.outputPreviewMeshURL ?? store.previewMeshURL
+            return store.heatmapMeshURL
         case .anchorInfluence:
-            return store.anchorInfluenceMeshURL ?? store.outputPreviewMeshURL ?? store.previewMeshURL
+            return store.anchorInfluenceMeshURL
         case .wireframe:
             return store.outputPreviewMeshURL ?? store.previewMeshURL
         case .original:
@@ -40,7 +41,7 @@ struct ModelPreviewCard: View {
                 }
                 if store.inspection != nil {
                     Picker("Preview", selection: $store.previewMode) {
-                        ForEach(PreviewMode.allCases) { mode in
+                        ForEach(availablePreviewModes) { mode in
                             Text(mode.rawValue).tag(mode)
                         }
                     }
@@ -62,38 +63,24 @@ struct ModelPreviewCard: View {
                         meshURL: meshURL,
                         resetToken: cameraResetToken,
                         wireframe: store.previewMode == .wireframe,
-                        performance: store.viewerPerformance
+                        performance: store.viewerPerformance,
+                        displayScale: previewDisplayScale
                     )
                         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .overlay(alignment: .topTrailing) {
-                            HStack(spacing: 8) {
-                                Text("Drag to orbit  |  Scroll to zoom")
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.66))
-                                Button {
-                                    cameraResetToken += 1
-                                } label: {
-                                    Image(systemName: "viewfinder")
-                                }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(.cyan.opacity(0.9))
-                                .help("Reset camera")
-                                Button {
+                        .overlay(alignment: .top) {
+                            ViewerToolbar(
+                                isFullScreen: isFullScreen,
+                                reset: { cameraResetToken += 1 },
+                                toggleFullScreen: {
                                     NSApp.keyWindow?.toggleFullScreen(nil)
                                     isFullScreen.toggle()
-                                } label: {
-                                    Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                                 }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(.cyan.opacity(0.9))
-                                .help("Toggle fullscreen viewer window")
-                            }
+                            )
+                            .frame(maxWidth: .infinity, alignment: .center)
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.black.opacity(0.42), in: Capsule())
-                            .padding(12)
+                            .padding(.top, 8)
                         }
-                } else if let image = store.previewImage {
+                } else if store.previewMode == .plateImage, let image = store.previewImage {
                     Image(nsImage: image)
                         .resizable()
                         .scaledToFit()
@@ -110,8 +97,12 @@ struct ModelPreviewCard: View {
                                     .padding(12)
                             }
                         }
+                } else if store.inspection != nil {
+                    PreviewModePlaceholder(mode: store.previewMode)
                 } else {
                     EmptyDropPrompt(isTargeted: isTargeted)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                        .offset(y: compact ? -28 : -54)
                         .overlay(alignment: .bottom) {
                             if store.isBuildingPreview {
                                 Label(store.progressMessage, systemImage: "hourglass")
@@ -174,6 +165,12 @@ struct ModelPreviewCard: View {
                     .foregroundStyle(.orange.opacity(0.82))
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if store.isBuildingPreview || store.isPlanningPreview || store.isWorking {
+                Label(store.timingMessage, systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(.cyan.opacity(0.72))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let reference = store.referenceURL {
                 Label("Visual target: \(reference.lastPathComponent)", systemImage: "scope")
                     .font(.caption)
@@ -189,15 +186,17 @@ struct ModelPreviewCard: View {
                 .foregroundStyle(validation.verified ? .green.opacity(0.86) : .orange.opacity(0.88))
             }
             HStack(spacing: 12) {
-                Picker("Render", selection: $store.viewerPerformance) {
-                    ForEach(ViewerPerformance.allCases) { option in Text(option.rawValue).tag(option) }
+                if store.inspection?.metrics == nil {
+                    Spacer(minLength: 0)
                 }
-                .pickerStyle(.menu)
+                renderControlGroup
                 if let metrics = store.inspection?.metrics {
                     Spacer()
                     Text("\(metrics.triangleCount.formatted()) polygons | \(metrics.vertexCount.formatted()) vertices | \(ByteCountFormatter.string(fromByteCount: Int64(metrics.previewMemoryEstimateBytes), countStyle: .memory)) preview memory | ~\(String(format: "%.1f", metrics.previewBuildEstimateSeconds))s build")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.white.opacity(0.46))
+                } else {
+                    Spacer(minLength: 0)
                 }
             }
             .font(.caption)
@@ -207,7 +206,30 @@ struct ModelPreviewCard: View {
         .background(CardSurface())
         .onChange(of: store.result?.output) { _, newOutput in
             if newOutput != nil {
-                store.previewMode = .predicted
+                store.previewMode = store.outputPreviewMeshURL == nil ? .original : .predicted
+            }
+        }
+        .onChange(of: previewAvailabilityKey) { _, _ in
+            ensureAvailablePreviewMode()
+        }
+    }
+
+    private var renderControlGroup: some View {
+        HStack(spacing: 12) {
+            Picker("Render", selection: $store.viewerPerformance) {
+                ForEach(ViewerPerformance.allCases) { option in Text(option.rawValue).tag(option) }
+            }
+            .pickerStyle(.menu)
+            if showsWasteScaleControl {
+                Picker("Waste preview size", selection: $wastePreviewDisplayScale) {
+                    Text("100").tag(1.0)
+                    Text("75").tag(0.75)
+                    Text("50").tag(0.5)
+                    Text("35").tag(0.35)
+                    }
+                .pickerStyle(.segmented)
+                .frame(width: 210)
+                .help("Visual-only display scale for color-loss and anchor-influence previews. The generated 3MF is unchanged.")
             }
         }
     }
@@ -228,6 +250,91 @@ struct ModelPreviewCard: View {
         case .wireframe: return "Predicted palette wireframe"
         }
     }
+
+    private var showsWasteScaleControl: Bool {
+        store.previewMode == .colorLoss || store.previewMode == .anchorInfluence
+    }
+
+    private var previewDisplayScale: Double {
+        showsWasteScaleControl ? wastePreviewDisplayScale : 1.0
+    }
+
+    private var availablePreviewModes: [PreviewMode] {
+        var modes: [PreviewMode] = []
+        if store.previewImage != nil {
+            modes.append(.plateImage)
+        }
+        if store.previewMeshURL != nil {
+            modes.append(.original)
+        }
+        if store.outputPreviewMeshURL != nil {
+            modes.append(.predicted)
+            modes.append(.validation)
+        }
+        if store.heatmapMeshURL != nil {
+            modes.append(.colorLoss)
+        }
+        if store.anchorInfluenceMeshURL != nil {
+            modes.append(.anchorInfluence)
+        }
+        if store.previewMeshURL != nil || store.outputPreviewMeshURL != nil {
+            modes.append(.wireframe)
+        }
+        return modes.isEmpty ? [.original] : modes
+    }
+
+    private var previewAvailabilityKey: String {
+        availablePreviewModes.map(\.rawValue).joined(separator: "|")
+    }
+
+    private func ensureAvailablePreviewMode() {
+        guard !availablePreviewModes.contains(store.previewMode) else { return }
+        if store.previewMeshURL != nil {
+            store.previewMode = .original
+        } else if let first = availablePreviewModes.first {
+            store.previewMode = first
+        }
+    }
+}
+
+private struct ViewerToolbar: View {
+    let isFullScreen: Bool
+    let reset: () -> Void
+    let toggleFullScreen: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Label("Drag to orbit. Scroll to zoom.", systemImage: "move.3d")
+                .labelStyle(.titleAndIcon)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.72))
+                .lineLimit(1)
+            Divider()
+                .frame(height: 16)
+                .overlay(.white.opacity(0.18))
+            Button(action: reset) {
+                Image(systemName: "viewfinder")
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.cyan.opacity(0.9))
+            .help("Reset camera")
+            Button(action: toggleFullScreen) {
+                Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.cyan.opacity(0.9))
+            .help("Toggle fullscreen viewer window")
+        }
+        .frame(minHeight: 32, alignment: .center)
+        .padding(.horizontal, 12)
+        .background(.black.opacity(0.5), in: Capsule())
+        .overlay {
+            Capsule().stroke(.white.opacity(0.1), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
+    }
 }
 
 private struct EmptyDropPrompt: View {
@@ -244,6 +351,24 @@ private struct EmptyDropPrompt: View {
             Text("Images can also be added as visual references")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.45))
+        }
+    }
+}
+
+private struct PreviewModePlaceholder: View {
+    let mode: PreviewMode
+
+    var body: some View {
+        VStack(spacing: 13) {
+            Image(systemName: "cube.transparent")
+                .font(.system(size: 42, weight: .light))
+                .foregroundStyle(.white.opacity(0.34))
+            Text(mode.rawValue)
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.white.opacity(0.76))
+            Text("Waiting for preview asset")
+                .font(.callout)
+                .foregroundStyle(.white.opacity(0.42))
         }
     }
 }

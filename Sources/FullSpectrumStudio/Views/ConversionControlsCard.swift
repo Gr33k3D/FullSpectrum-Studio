@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConversionControlsCard: View {
     @EnvironmentObject private var store: StudioStore
+    @State private var anchorToolsExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -25,6 +26,44 @@ struct ConversionControlsCard: View {
                 .foregroundStyle(.orange.opacity(0.78))
                 .fixedSize(horizontal: false, vertical: true)
 
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Planner")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.42))
+                    Spacer(minLength: 10)
+                    ReadableMenuPicker(
+                        selection: $store.plannerMode,
+                        options: PlannerMode.allCases,
+                        optionTitle: { $0.title }
+                    )
+                    .frame(width: 128)
+                }
+                Text(store.plannerMode.explanation)
+                    .font(.caption2)
+                    .foregroundStyle(store.plannerMode == .best ? .cyan.opacity(0.68) : .white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Planning sample")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white.opacity(0.42))
+                    Spacer(minLength: 10)
+                    ReadableMenuPicker(
+                        selection: $store.planningSample,
+                        options: PlanningSample.allCases,
+                        optionTitle: { $0.title }
+                    )
+                    .frame(width: 148)
+                }
+                Text(store.planningSample.explanation)
+                    .font(.caption2)
+                    .foregroundStyle(store.planningSample == .preview ? .cyan.opacity(0.68) : .white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Text("FILAMENT SOURCE")
                 .font(.caption2.weight(.bold))
                 .tracking(0.9)
@@ -40,6 +79,121 @@ struct ConversionControlsCard: View {
             Text(store.paletteSource.explanation)
                 .font(.caption)
                 .foregroundStyle(store.paletteSource == .inventory ? .cyan.opacity(0.68) : .orange.opacity(0.76))
+
+            if store.anchorSelectionEnabled {
+                DisclosureGroup(isExpanded: $anchorToolsExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack {
+                                Text("Material types")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.white.opacity(0.46))
+                                Spacer()
+                                Button("All") {
+                                    store.clearMaterialFamilies()
+                                }
+                                .font(.caption2.weight(.medium))
+                                .buttonStyle(.plain)
+                                .foregroundStyle(store.activeMaterialFamilies.isEmpty ? .cyan.opacity(0.8) : .white.opacity(0.5))
+                            }
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 6)], alignment: .leading, spacing: 6) {
+                                ForEach(store.materialFamilyOptions) { family in
+                                    Button {
+                                        store.toggleMaterialFamily(family.series)
+                                    } label: {
+                                        HStack(spacing: 6) {
+                                            Image(systemName: store.activeMaterialFamilies.contains(family.series) ? "checkmark.circle.fill" : "circle")
+                                                .imageScale(.small)
+                                            Text(family.series)
+                                                .lineLimit(1)
+                                                .minimumScaleFactor(0.78)
+                                            Text("\(family.count)")
+                                                .monospacedDigit()
+                                                .foregroundStyle(.white.opacity(0.42))
+                                        }
+                                        .font(.caption2.weight(.medium))
+                                        .foregroundStyle(store.activeMaterialFamilies.isEmpty || store.activeMaterialFamilies.contains(family.series) ? .white.opacity(0.82) : .white.opacity(0.48))
+                                        .padding(.horizontal, 8)
+                                        .frame(minHeight: 26)
+                                        .background(.white.opacity(store.activeMaterialFamilies.contains(family.series) ? 0.12 : 0.055), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            Text(store.activeMaterialFamilies.isEmpty ? "Planner may use every allowed Bambu PLA family for this source." : "Planner is limited to: \(store.activeMaterialFamilies.joined(separator: ", ")).")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.44))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        Divider().overlay(.white.opacity(0.08))
+
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack {
+                                Text("Anchor pins")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.white.opacity(0.46))
+                                Spacer()
+                                if store.planPreview != nil || store.result != nil {
+                                    Button("Use recommended") {
+                                        store.useRecommendedAnchors()
+                                    }
+                                    .font(.caption2.weight(.medium))
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.cyan)
+                                }
+                                if !store.pinnedAnchorKeys.isEmpty {
+                                    Button("Clear") {
+                                        store.clearAnchorPins()
+                                    }
+                                    .font(.caption2.weight(.medium))
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.white.opacity(0.55))
+                                }
+                            }
+                            Text(store.pinnedAnchorSummary)
+                                .font(.caption2)
+                                .foregroundStyle(.cyan.opacity(0.68))
+                            TextField("Search Bambu anchor colors", text: $store.anchorSearch)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.caption)
+                            ScrollView {
+                                VStack(spacing: 5) {
+                                    ForEach(Array(store.anchorCandidateOptions.prefix(48))) { candidate in
+                                        AnchorCandidateButton(
+                                            candidate: candidate,
+                                            isPinned: store.pinnedAnchorKeys.contains(candidate.key)
+                                        ) {
+                                            store.toggleAnchorPin(candidate)
+                                        }
+                                    }
+                                }
+                            }
+                            .frame(maxHeight: 178)
+                            if store.anchorCandidateOptions.count > 48 {
+                                Text("Showing 48 of \(store.anchorCandidateOptions.count). Search or narrow material types.")
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.42))
+                            }
+                            Text("Pinned anchors are forced into the plan; FullSpectrum fills the remaining slots with the best Bambu filaments.")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.44))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.top, 7)
+                } label: {
+                    HStack {
+                        Label("Bambu materials and anchors", systemImage: "scope")
+                        Spacer()
+                        Text(store.activeMaterialFamilies.isEmpty ? store.pinnedAnchorSummary : "\(store.activeMaterialFamilies.count) type\(store.activeMaterialFamilies.count == 1 ? "" : "s") · \(store.pinnedAnchorSummary)")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.76))
+                }
+            }
 
             if store.paletteSource == .catalog || store.paletteSource == .allBambu {
                 VStack(alignment: .leading, spacing: 6) {
@@ -105,7 +259,7 @@ struct ConversionControlsCard: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.7))
-                Toggle("Auto-select best quality and anchor parents", isOn: $store.smartQuality)
+                Toggle("Auto-select high-fidelity quality and anchor parents", isOn: $store.smartQuality)
                     .font(.caption2)
                     .toggleStyle(.checkbox)
                     .foregroundStyle(.white.opacity(0.62))
@@ -115,14 +269,18 @@ struct ConversionControlsCard: View {
                 .disabled(store.smartQuality)
                 .opacity(store.smartQuality ? 0.45 : 1)
                 .tint(.cyan)
-                Text(store.smartQuality ? "Smart: tests practical, balanced and detail plans, then keeps the best validated palette." :
+                Text(store.smartQuality ? "Smart: tests practical, balanced and high-fidelity math plans with the selected planner, then keeps the best validated palette." :
                         store.qualityBias < 40 ? "Practical: requires stronger visual gains before creating mixes." :
-                        store.qualityBias > 75 ? "Detail: permits more logical mixes and three-color candidates." :
+                        store.qualityBias > 75 ? "Detail: searches denser Bambu-style 2/3-color recipes and parent anchors." :
                         "Balanced: suppresses weak mixes while keeping visible improvements.")
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.48))
+                Text("Auto keeps 2-6 physical slots so slot 7 can stay available for support; 7/8 are experimental manual choices.")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.42))
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .help("Smart mode chooses the quality threshold and physical anchor colors together, based on the final palette after mixed recipes are generated.")
+            .help("Smart mode chooses the quality threshold and physical anchor colors together, based on the final Bambu-reconstructed palette after mixed recipes are generated.")
 
             if let resolved = store.result?.quality.resolvedQualityBias, store.result?.quality.qualityBiasMode == "auto" {
                 HStack(spacing: 6) {
@@ -140,6 +298,15 @@ struct ConversionControlsCard: View {
             Text(store.mixPrediction.explanation)
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.48))
+
+            if store.selectedFile != nil {
+                Label(store.optionEstimateMessage, systemImage: "timer")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.cyan.opacity(0.72))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help("Rough local estimate for the current model and options. It improves after successful local runs.")
+            }
 
             HStack(spacing: 10) {
                 Button(store.referenceURL == nil ? "Add Reference" : "Change Reference") {
@@ -182,7 +349,7 @@ struct ConversionControlsCard: View {
                     .lineLimit(1)
             }
 
-            if store.isWorking || store.isBuildingPreview || store.progress > 0 {
+            if store.isWorking || store.isPlanningPreview || store.isBuildingPreview || store.progress > 0 {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack {
                         Text(store.progressMessage)
@@ -198,11 +365,42 @@ struct ConversionControlsCard: View {
                     ProgressView(value: store.progress)
                         .progressViewStyle(.linear)
                         .tint(.cyan)
+                    Label(store.timingMessage, systemImage: "clock")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.cyan.opacity(0.72))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(Array(store.activityMessages.suffix(3).enumerated()), id: \.offset) { _, message in
+                        if message != store.progressMessage {
+                            Text(message)
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.42))
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                 }
                 .padding(.vertical, 2)
             }
 
             HStack(spacing: 10) {
+                Button {
+                    store.previewPlan()
+                } label: {
+                    HStack(spacing: 8) {
+                        if store.isPlanningPreview {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "eye")
+                        }
+                        Text(store.isPlanningPreview ? "Previewing..." : "Preview Plan")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(StudioButtonStyle())
+                .disabled(store.selectedFile == nil || store.isWorking || store.isPlanningPreview || store.isBuildingPreview)
+                .help("Run the selected planner options without writing a 3MF")
+
                 Button {
                     store.convert()
                 } label: {
@@ -217,7 +415,7 @@ struct ConversionControlsCard: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(StudioButtonStyle(prominent: true))
-                .disabled(store.selectedFile == nil || store.isWorking)
+                .disabled(store.selectedFile == nil || store.isWorking || store.isPlanningPreview)
 
                 if store.result != nil {
                     Button {
@@ -232,6 +430,10 @@ struct ConversionControlsCard: View {
                     Button("Cancel") { store.cancelConversion() }
                         .buttonStyle(StudioButtonStyle())
                         .help("Stop the active conversion")
+                } else if store.isPlanningPreview {
+                    Button("Cancel") { store.cancelPlanPreview() }
+                        .buttonStyle(StudioButtonStyle())
+                        .help("Stop the plan preview")
                 } else if store.isBuildingPreview {
                     Button("Stop Preview") { store.cancelPreview() }
                         .buttonStyle(StudioButtonStyle())
@@ -267,15 +469,64 @@ struct ConversionControlsCard: View {
         .padding(17)
         .background(CardSurface())
         .onChange(of: store.paletteSource) { _, source in
+            store.plannerInputsChanged()
             if source == .exactCMYKW {
                 store.mode = .cmykw
             }
         }
         .onChange(of: store.mode) { _, mode in
+            store.plannerInputsChanged()
             if mode != .cmykw && store.paletteSource == .exactCMYKW {
                 store.paletteSource = .catalog
             }
         }
+        .onChange(of: store.plannerMode) { _, _ in store.plannerInputsChanged() }
+        .onChange(of: store.planningSample) { _, _ in store.plannerInputsChanged() }
+        .onChange(of: store.realSlots) { _, _ in store.plannerInputsChanged() }
+        .onChange(of: store.smartQuality) { _, _ in store.plannerInputsChanged() }
+        .onChange(of: store.qualityBias) { _, _ in store.plannerInputsChanged() }
+    }
+}
+
+private struct AnchorCandidateButton: View {
+    let candidate: AnchorCandidate
+    let isPinned: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color(hex: candidate.color))
+                    .frame(width: 16, height: 16)
+                    .overlay { Circle().stroke(.white.opacity(0.18), lineWidth: 1) }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(candidate.name)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .lineLimit(1)
+                    Text(anchorDetail)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.42))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Image(systemName: isPinned ? "checkmark.circle.fill" : "plus.circle")
+                    .foregroundStyle(isPinned ? .cyan : .white.opacity(0.38))
+                    .imageScale(.small)
+            }
+            .padding(.horizontal, 7)
+            .frame(minHeight: 34)
+            .background(.white.opacity(isPinned ? 0.10 : 0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var anchorDetail: String {
+        if let grams = candidate.remainingGrams {
+            return "\(candidate.series) · \(candidate.color) · \(Int(grams))g"
+        }
+        return "\(candidate.series) · \(candidate.color)"
     }
 }
 

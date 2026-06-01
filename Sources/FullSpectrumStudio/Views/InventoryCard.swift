@@ -38,6 +38,27 @@ struct InventoryCard: View {
                     Spacer()
                 }
 
+                if let catalog = inventory.catalog {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Label(catalogHeadline(catalog), systemImage: "shippingbox")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.cyan.opacity(0.74))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Core \(catalog.coreUsableCount) • All Bambu \(catalog.allUsableCount) • \(catalog.totalRows) official rows")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.48))
+                        if !catalog.families.isEmpty {
+                            Text(catalog.families.prefix(4).map { "\($0.series) \($0.count)" }.joined(separator: " • "))
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.42))
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .help(catalog.source ?? "Official Bambu catalog source")
+                }
+
                 HStack(spacing: 4) {
                     ForEach(Array(filteredSpools(inventory).prefix(18))) { spool in
                         RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -85,9 +106,9 @@ struct InventoryCard: View {
         case .inventory:
             return "Physical colors are selected only from this stock. Recipes show maximum available material before slicing."
         case .catalog:
-            return "Catalog mode can use colors not in stock. Switch to My Inventory for stock-safe selection and estimates."
+            return "Catalog mode uses the installed Bambu Studio official color database. Switch to My Inventory for stock-safe selection."
         case .allBambu:
-            return "Additional Bambu PLA families are included only when active in local inventory; catalog choices still need availability checks."
+            return "All Bambu uses every supported PLA family in the installed Bambu catalog; regional store stock still needs checking."
         case .custom:
             return "Custom brand libraries are local JSON data; verify printer profiles and physical colors before printing."
         case .exactCMYKW:
@@ -102,6 +123,22 @@ struct InventoryCard: View {
             || $0.color.localizedCaseInsensitiveContains(store.inventorySearch)
             || $0.brand.localizedCaseInsensitiveContains(store.inventorySearch)
         }
+    }
+
+    private func catalogHeadline(_ catalog: CatalogSnapshot) -> String {
+        let rawVersion = catalog.bambuStudio?.version
+        let rawBuild = catalog.bambuStudio?.build
+        let version = rawVersion?.isEmpty == false ? rawVersion : nil
+        let build = rawBuild?.isEmpty == false ? rawBuild : nil
+        let versionText: String
+        if let version, let build {
+            versionText = "Bambu Studio \(version) (\(build))"
+        } else if let version {
+            versionText = "Bambu Studio \(version)"
+        } else {
+            versionText = "Bambu Studio catalog"
+        }
+        return "Official catalog loaded from \(versionText)"
     }
 }
 

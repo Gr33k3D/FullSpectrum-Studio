@@ -11,9 +11,9 @@ This is an independent community release built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
 Latest public package: [v0.4.9 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.9).
-The v0.4.9 package promotes the reliability fixes from v0.4.8, keeps smart
-quality planning on by default, adds catalog-region selection for planning
-warnings and ships Windows plus macOS release assets from GitHub Actions.
+The current macOS H2C prerelease work is documented in
+[v0.4.12 macOS H2C notes](docs/RELEASE_NOTES_0.4.12_MACOS.md) and the
+[adaptive planner report](docs/reports/2026-06-01-macos-h2c-adaptive-planner-report.md).
 
 ## What It Does
 
@@ -125,6 +125,68 @@ saved recipe display color. Quality scores still estimate closeness to the
 source, not a calibrated physical print: material, layers and lighting remain
 real-world variables.
 
+## How Color Mixing Works
+
+FullSpectrum does not create continuous, chemical filament blends. It uses
+Bambu-style mixed filament slots, which behave more like 3D halftoning: a
+logical mixed slot references two or three physical base filaments, and the
+printer alternates very thin sublayers according to the saved component
+ratios. At normal viewing distance the eye averages those sublayers into a
+new perceived color, similar to how 2D CMYK printing uses discrete ink dots to
+suggest continuous tones.
+
+The search is not "try every filament combination forever." The engine first
+builds a candidate pool from the selected source: owned inventory, Bambu Core,
+All Bambu or a custom JSON library. For Bambu catalog planning it reads the
+installed Bambu Studio color-code catalog when available, so candidates are
+real Bambu color entries instead of guessed names. It then shortlists likely
+anchors by looking at the source paint colors, their painted usage, optional
+reference colors, luminance coverage, dark/light coverage and saturated color
+coverage. The shortlist is split into hue/neutral spectrum compartments so
+important reds, blues, warm neutrals or darks do not disappear just because a
+single global nearest-color score liked another region more. A beam/greedy pass
+proposes physical anchor sets, and Best mode adds one swap-refinement pass to
+replace weak anchors after the final mixed-palette score is known.
+
+Best mode also builds a target-aware in-memory mix database for the active
+candidate pool. Pair and likely three-color Bambu halftone recipes are
+reconstructed once, scored against the source paint colors, then reused while
+the anchor beam tests thousands of possible physical-slot sets. This matters
+because the 32-slot output limit is not the slow part; repeatedly recomputing
+the same Bambu mix recipes during anchor selection is.
+
+Smart quality is adaptive. Instead of always walking every quality band, it
+probes the spectrum around `70/100`, checks whether the result is too inaccurate
+or too wasteful, then jumps toward lower-waste or higher-fidelity bands only
+when they can plausibly improve the score. The conversion report lists which
+bands were tested and which were skipped.
+
+For each source paint color, FullSpectrum compares the nearest physical anchor
+against a small set of possible mixed recipes. These recipes are intentionally
+discrete. Bambu stores normalized ratios, then reconstructs mixed swatches from
+integer percentage weights, and arbitrary ratios such as 30:70 imply longer
+layer cadence patterns that can reduce vertical color resolution and increase
+print complexity. Practical planning therefore uses simple repeatable ratios:
+`1:3`, `1:2`, `1:1`, `2:1` and `3:1` for two-color mixes. Detail/Best mode can
+also test denser but still bounded schedules such as `1:5`, `1:4`, `2:3`,
+`3:2`, `4:1`, `5:1`, plus selected three-color ratios including `1:1:1`,
+`3:1:1`, `2:2:1` and nearby permutations. It only keeps a mixed slot when it
+beats the nearest physical anchor by enough Delta E, stays inside the current
+quality-vs-waste threshold and fits within Bambu's paint-slot limit.
+
+The predicted swatch is reconstructed with Bambu Studio's `FilamentMixer`
+model, not a hand-written Yule-Nielsen implementation. Yule-Nielsen-style
+optical models are useful for explaining halftone reflectance, but the current
+app must match what Bambu Studio reloads from the `.3mf`; otherwise the UI can
+show one color while Bambu shows another. That is why every output is reopened
+and checked so saved mixed colors match the Bambu-reconstructed colors.
+
+Calibration still matters. Real prints can drift because filament opacity,
+surface texture, layer height, temperature, lighting, dark/light interaction,
+saturation loss and hue drift are physical effects. If new measured mix colors
+are added later, they should be fitted back into the model, or into an explicit
+calibration correction layer, instead of just adding more theoretical ratios.
+
 ## Reference And Source Import
 
 Reference mode samples texture information from a `.glb`, an OBJ material
@@ -154,10 +216,17 @@ swap count or filament grams from an unsliced painted project; those require
 sliced toolpaths.
 
 Smart quality mode is the recommended default. It tries practical, balanced and
-detail thresholds, scores the final palette after mixed recipes are generated,
-and selects the best tradeoff for the painted usage in that model. Manual
-quality-versus-waste values are still available when you want to force a simpler
-or more detailed result.
+detail thresholds adaptively, scores the final palette after mixed recipes are
+generated, and selects the best tradeoff for the painted usage in that model.
+Manual quality-versus-waste values are still available when you want to force a
+simpler or more detailed result.
+
+The macOS app also has a planning-sample option. `Paint states` uses the
+original decoded Bambu paint usage. `Render preview` uses the same optimized
+preview mesh built for the viewport as a visual weighting sample, so large
+visible regions matter more during anchor selection. This is still only a
+planning weight: the exported `.3mf` is always written from the original decoded
+Bambu paint states, not from a screenshot or inferred repaint.
 
 ## macOS App
 
@@ -174,8 +243,10 @@ Requirements:
 
 The application is written to `dist/FullSpectrum Studio.app`. The viewer is
 the primary workspace, with collapsible tools and activity log plus fullscreen
-preview for screenshots and close visual inspection. Community preview ZIPs
-have a verified ad-hoc bundle signature; they are not Developer ID notarized.
+preview for screenshots and close visual inspection. The movable 3D viewport
+uses an H2C-oriented 330 x 320 Textured PEI plate reference because this build
+is tuned around the H2C workflow. Community preview ZIPs have a verified ad-hoc
+bundle signature; they are not Developer ID notarized.
 
 ## Windows App
 
@@ -244,6 +315,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
+- [0.4.12 macOS H2C Notes](docs/RELEASE_NOTES_0.4.12_MACOS.md)
 - [0.4.9 Release Notes](docs/RELEASE_NOTES_0.4.9.md)
 - [0.4.1 Reliability Notes](docs/RELEASE_NOTES_0.4.1.md)
 - [0.4.2 Button Fix Notes](docs/RELEASE_NOTES_0.4.2.md)
