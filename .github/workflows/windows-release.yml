@@ -20,6 +20,8 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           VERSION="${VERSION%-community-preview}"
+          VERSION="${VERSION%-macos-preview}"
+          VERSION="${VERSION%-macos}"
           if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
             VERSION="dev-${GITHUB_SHA::7}"
           fi
@@ -29,6 +31,8 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           VERSION="${VERSION%-community-preview}"
+          VERSION="${VERSION%-macos-preview}"
+          VERSION="${VERSION%-macos}"
           if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
             VERSION="dev-${GITHUB_SHA::7}"
           fi
@@ -40,6 +44,7 @@ jobs:
           path: release/*
 
   windows:
+    if: ${{ !contains(github.ref_name, '-macos') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,6 +86,7 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v', '' -replace '-community-preview$', ''
+          $version = $version -replace '-macos-preview$', '' -replace '-macos$', ''
           if ($env:GITHUB_REF_TYPE -ne 'tag') {
             $version = "dev-$($env:GITHUB_SHA.Substring(0, 7))"
           }
@@ -92,6 +98,7 @@ jobs:
         shell: pwsh
         run: |
           $version = $env:GITHUB_REF_NAME -replace '^v', '' -replace '-community-preview$', ''
+          $version = $version -replace '-macos-preview$', '' -replace '-macos$', ''
           if ($env:GITHUB_REF_TYPE -ne 'tag') {
             $version = "dev-$($env:GITHUB_SHA.Substring(0, 7))"
           }
@@ -102,7 +109,7 @@ jobs:
           path: release/*
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.macos.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
     needs: [macos, windows]
     runs-on: ubuntu-latest
     steps:
@@ -118,11 +125,31 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           VERSION="${VERSION%-community-preview}"
-          NOTES_FILE="docs/RELEASE_NOTES_${VERSION}.md"
+          VERSION="${VERSION%-macos-preview}"
+          VERSION="${VERSION%-macos}"
+          if [[ "$GITHUB_REF_NAME" == *"-macos"* && -f "docs/RELEASE_NOTES_${VERSION}_MACOS.md" ]]; then
+            NOTES_FILE="docs/RELEASE_NOTES_${VERSION}_MACOS.md"
+          else
+            NOTES_FILE="docs/RELEASE_NOTES_${VERSION}.md"
+          fi
           if [[ ! -f "$NOTES_FILE" ]]; then
             NOTES_FILE="docs/RELEASE_NOTES_0.4.3.md"
           fi
-          if [[ "$GITHUB_REF_NAME" == *"-community-preview" ]]; then
+          if [[ "$GITHUB_REF_NAME" == *"-macos"* ]]; then
+            TITLE="FullSpectrum Studio v${VERSION} macOS H2C Prerelease"
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+              gh release edit "$GITHUB_REF_NAME" \
+                --prerelease \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+              gh release upload "$GITHUB_REF_NAME" release/* --clobber
+            else
+              gh release create "$GITHUB_REF_NAME" release/* \
+                --prerelease \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE"
+            fi
+          elif [[ "$GITHUB_REF_NAME" == *"-community-preview" ]]; then
             TITLE="FullSpectrum Studio v${VERSION} Community Preview"
             if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
               gh release edit "$GITHUB_REF_NAME" \
