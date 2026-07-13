@@ -7,13 +7,25 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify tag matches shared version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_VERSION="${TAG_VERSION%-community-preview}"
+          TAG_VERSION="${TAG_VERSION%-macos-preview}"
+          TAG_VERSION="${TAG_VERSION%-macos}"
+          test "$TAG_VERSION" = "$(tr -d '[:space:]' < VERSION)"
       - name: Run engine regression tests
         run: python3 -m unittest discover -s tests -v
       - name: Build and verify application bundle
@@ -51,10 +63,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-windows.txt
       - name: Install packaging dependencies
         run: pip install -r requirements-windows.txt
       - name: Run engine regression tests
         run: python -m unittest discover -s tests -v
+      - name: Validate Windows desktop shell
+        run: |
+          python -m py_compile desktop/app_support.py desktop/full_spectrum_studio.py fullspectrum_engine.py bambu_mixer_model.py
+          python -c "import desktop.full_spectrum_studio as app; assert app.APP_VERSION"
       - name: Build portable application
         run: >
           pyinstaller --noconfirm --windowed
@@ -81,6 +99,7 @@ jobs:
           --add-data "bambu_mixer_model.py;."
           --add-data "LICENSE;."
           --add-data "THIRD_PARTY_NOTICES.md;."
+          --add-data "VERSION;."
           desktop/full_spectrum_studio.py
       - name: Create portable ZIP
         shell: pwsh
@@ -112,6 +131,8 @@ jobs:
     if: ${{ always() && startsWith(github.ref, 'refs/tags/') && needs.macos.result == 'success' && (needs.windows.result == 'success' || needs.windows.result == 'skipped') }}
     needs: [macos, windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

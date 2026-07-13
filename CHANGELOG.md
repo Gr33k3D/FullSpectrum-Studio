@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.13 Official Release - 2026-07-13
+
+### Desktop Apps
+
+- Reworks the macOS app into a preview-first workspace with separate Plan,
+  Filaments and Results inspectors.
+- Adds Preview Plan to the Windows app and shows the release version in its
+  title bar and header.
+- Moves both desktop packages and engine output filenames to one shared
+  `VERSION` file.
+
+### Fixed
+
+- Preserves eight-digit Bambu filament colors such as `#00000000` instead of
+  dropping the slot and shifting every later paint reference.
+- Opens the Results inspector when a macOS plan preview completes.
+- Clears stale validation results when planner inputs change or a new run
+  begins.
+- Keeps manually pinned anchors when the filament search field hides them and
+  prevents selecting more pins than the physical-slot limit.
+
+### Release And Privacy
+
+- Adds Windows shell compile/import checks to the release workflow, pip
+  caching, scoped permissions and concurrency control.
+- Updates Windows packaging to Pillow `12.2.0` and PyInstaller `6.21.0`; the
+  pinned direct dependencies pass `pip-audit` with no known vulnerabilities.
+- Removes private-model screenshots, names and local machine paths from the
+  current public tree.
+
 ## 0.4.9 Official Release - 2026-05-31
 
 ### Release

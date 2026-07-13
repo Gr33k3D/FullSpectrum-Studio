@@ -112,7 +112,23 @@ MAX_REFERENCE_BYTES = 600 * 1024 * 1024
 MAX_IMPORT_FACES = 2_000_000
 MAX_INTERACTIVE_PREVIEW_TRIANGLES = 750_000
 OPTIMIZED_PREVIEW_GRID_RESOLUTION = 72
-OUTPUT_VERSION = "v0.4.12-macos"
+
+
+def release_version():
+    override=os.environ.get("FULLSPECTRUM_VERSION","").strip()
+    if override:
+        return override.removeprefix("v")
+    try:
+        value=Path(__file__).resolve().with_name("VERSION").read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"\d+\.\d+\.\d+",value):
+            return value
+    except OSError:
+        pass
+    return "0.4.13"
+
+
+APP_VERSION = release_version()
+OUTPUT_VERSION = f"v{APP_VERSION}"
 DEFAULT_QUALITY_BIAS = 60
 SMART_QUALITY_CANDIDATES = (35, 50, 70, 85, 100)
 SMART_QUALITY_PROBE = 70
@@ -568,12 +584,15 @@ def verify_preservation(archive, snapshot):
     }
 
 def colors_from_project(obj):
-    out=[]
     v=obj.get("filament_colour",[])
-    if isinstance(v,list):
-        for x in v:
-            if re.match(r"#?[0-9A-Fa-f]{6}$", str(x).strip()):
-                out.append(hx(x).upper())
+    if not isinstance(v,list):
+        return []
+    out=[]
+    for slot,value in enumerate(v,start=1):
+        raw=str(value).strip()
+        if not re.fullmatch(r"#?[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?",raw):
+            raise RuntimeError(f"filament_colour slot {slot} has invalid color {value!r}")
+        out.append(hx(raw).upper())
     return out
 
 def preview_colors_from_project(obj, mix_model="bambu"):
@@ -957,7 +976,10 @@ def sample_reference_colors(image, destination):
     try:
         from PIL import Image
         with Image.open(image) as source:
-            pixels=list(source.convert("RGB").resize((96,96)).getdata())
+            resized=source.convert("RGB").resize((96,96))
+            pixel_data=(resized.get_flattened_data() if hasattr(resized,"get_flattened_data")
+                        else resized.getdata())
+            pixels=list(pixel_data)
     except ImportError:
         bmp=destination/"reference_sample.bmp"
         if not Path("/usr/bin/sips").exists():

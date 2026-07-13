@@ -6,10 +6,10 @@ struct ConversionControlsCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("PALETTE ENGINE")
+            Text("PLAN SETTINGS")
                 .font(.caption.weight(.bold))
                 .tracking(1.2)
-                .foregroundStyle(.white.opacity(0.5))
+                .foregroundStyle(Color.studioTertiaryText)
 
             Picker("Palette strategy", selection: $store.mode) {
                 ForEach(PaletteMode.allCases) { mode in
@@ -308,7 +308,7 @@ struct ConversionControlsCard: View {
                     .help("Rough local estimate for the current model and options. It improves after successful local runs.")
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Button(store.referenceURL == nil ? "Add Reference" : "Change Reference") {
                     store.chooseReferenceFile()
                 }
@@ -416,28 +416,29 @@ struct ConversionControlsCard: View {
                 }
                 .buttonStyle(StudioButtonStyle(prominent: true))
                 .disabled(store.selectedFile == nil || store.isWorking || store.isPlanningPreview)
+            }
 
-                if store.result != nil {
-                    Button {
-                        store.revealOutput()
-                    } label: {
-                        Label("Open Folder", systemImage: "folder")
-                    }
-                    .buttonStyle(StudioButtonStyle())
+            if store.result != nil || store.isWorking || store.isPlanningPreview || store.isBuildingPreview {
+                HStack(spacing: 8) {
+                    if store.result != nil {
+                        Button {
+                            store.revealOutput()
+                        } label: {
+                            Label("Reveal Output", systemImage: "folder")
+                        }
+                        .buttonStyle(StudioButtonStyle())
                         .help("Reveal the validated output in Finder")
-                }
-                if store.isWorking {
-                    Button("Cancel") { store.cancelConversion() }
-                        .buttonStyle(StudioButtonStyle())
-                        .help("Stop the active conversion")
-                } else if store.isPlanningPreview {
-                    Button("Cancel") { store.cancelPlanPreview() }
-                        .buttonStyle(StudioButtonStyle())
-                        .help("Stop the plan preview")
-                } else if store.isBuildingPreview {
-                    Button("Stop Preview") { store.cancelPreview() }
-                        .buttonStyle(StudioButtonStyle())
-                        .help("Stop only the optional interactive preview build")
+                    }
+                    Spacer()
+                    if store.isWorking || store.isPlanningPreview || store.isBuildingPreview {
+                        Button {
+                            store.cancelActiveOperation()
+                        } label: {
+                            Label(store.isBuildingPreview ? "Stop Preview" : "Cancel", systemImage: "stop.fill")
+                        }
+                        .buttonStyle(StudioButtonStyle(tint: .red))
+                        .help("Stop the active operation")
+                    }
                 }
             }
 
@@ -452,15 +453,6 @@ struct ConversionControlsCard: View {
                 .help("Open the saved validated .3mf in \(store.outputApplication.title)")
             }
 
-            HStack(spacing: 10) {
-                Image(systemName: store.result == nil ? "waveform.path.ecg" : "checkmark.shield.fill")
-                    .foregroundStyle(store.result == nil ? .cyan.opacity(0.7) : .green)
-                Text(store.status)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.66))
-                    .lineLimit(2)
-                Spacer()
-            }
             Toggle("Restore last local session", isOn: $store.restoreLastSession)
                 .toggleStyle(.switch)
                 .font(.caption2)

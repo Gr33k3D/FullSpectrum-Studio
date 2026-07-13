@@ -6,15 +6,9 @@ Build: `FullSpectrum Studio.app` `0.4.12` (`14`)
 
 Scope: macOS H2C prerelease only. This report does not include a Windows build.
 
-Privacy note: the Seraphin `.3mf` and reference `.glb` were used as local test
-inputs only. No private model file, generated `.3mf`, OBJ or GLB is committed
-or shared here.
-
-## Screenshots
-
-![FullSpectrum Studio macOS 0.4.12 Seraphin UI](assets/fullspectrum-macos-0.4.12-seraphin-ui.png)
-
-![H2C plate preview crop](assets/fullspectrum-macos-0.4.12-h2c-preview-crop.png)
+Privacy note: a private `.3mf` and reference `.glb` were used as local test
+inputs only. Their names, screenshots, source files and generated model exports
+are not included in the current repository tree.
 
 ## Baseline
 
@@ -80,19 +74,19 @@ large-model preview handling.
 - Active conversion messages explain when the deep planner is still working,
   what quality band is being tested and when a plan is past its estimate.
 
-## Seraphin Benchmark
+## Private Benchmark
 
 Command shape:
 
 ```bash
-python3 fullspectrum_engine.py /private/path/Seraphin.3mf \
+python3 fullspectrum_engine.py /private/path/model.3mf \
   --mode official \
   --palette-source all-bambu \
   --real-slots auto \
   --quality-bias auto \
   --planner-mode best \
   --planning-sample preview \
-  --reference /private/path/SeraphinRaw.glb \
+  --reference /private/path/reference.glb \
   --plan-preview \
   --json \
   --no-reveal
@@ -128,9 +122,8 @@ expected: the preview mesh is only used to weight planning. The final exported
   - Result: passed.
 - macOS app package: `./script/build_and_run.sh build`
   - Result: `dist/FullSpectrum Studio.app` built successfully.
-- Desktop install:
-  - Result: `/Users/matthiasbouwhuis/Desktop/FullSpectrum Studio.app`
-    reports version `0.4.12`, build `14`.
+- Packaged app:
+  - Result: `dist/FullSpectrum Studio.app` reports version `0.4.12`, build `14`.
 - Code signature:
   - Result: `codesign --verify --deep --verbose=2` passed for the Desktop app.
 
@@ -154,7 +147,7 @@ planner cases. The planner now starts with an adaptive `70/100` quality probe,
 splits anchor candidates into hue/neutral spectrum groups, reuses a cached
 Bambu mix-recipe matrix, and skips quality bands that are unlikely to help.
 
-On my private Seraphin test model the plan-preview path tested quality `70`
+On a private local test model the plan-preview path tested quality `70`
 and `100`, skipped `35/50/85`, and completed locally in about `2m03s` with
 `5` physical anchors, `21` mixed slots and `26` output slots. The macOS viewer
 now also shows an H2C-style `330 x 320` Textured PEI plate with a front marker

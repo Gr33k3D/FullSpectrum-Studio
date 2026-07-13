@@ -29,16 +29,17 @@
 
 ```bash
 python3 -m unittest discover -s tests -v
+python3 -m py_compile desktop/app_support.py desktop/full_spectrum_studio.py
 swift build -c debug
 ./script/build_and_run.sh build
 codesign --verify --deep --strict --verbose=2 "dist/FullSpectrum Studio.app"
 ```
 
-The suite currently includes `28` synthetic/regression and security tests,
-including rejection of over-limit GLB import before geometry decoding and a
-shareable-report reference-filename/inventory-quantity privacy check. It also tests lightweight
-metadata opening and grid-reduced optimized preview/analysis fallbacks for
-oversized models.
+The suite currently includes `49` engine, desktop, regression and security
+tests. Coverage includes over-limit GLB rejection before geometry decoding,
+shareable-report privacy, eight-digit 32-slot Bambu palettes, Windows Preview
+Plan output, lightweight metadata opening and grid-reduced preview/analysis
+fallbacks for oversized models.
 
 ## Regression Samples
 

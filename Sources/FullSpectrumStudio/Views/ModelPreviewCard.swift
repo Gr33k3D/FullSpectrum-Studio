@@ -29,15 +29,15 @@ struct ModelPreviewCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("MODEL PREVIEW")
+                Text("PREVIEW")
                     .font(.caption.weight(.bold))
                     .tracking(1.2)
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(Color.studioTertiaryText)
                 Spacer()
                 if let project = store.inspection {
                     Text("\(project.sourceSlots) original slots")
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.cyan.opacity(0.88))
+                        .foregroundStyle(Color.studioAccent)
                 }
                 if store.inspection != nil {
                     Picker("Preview", selection: $store.previewMode) {
@@ -51,11 +51,11 @@ struct ModelPreviewCard: View {
             }
 
             ZStack(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.black.opacity(0.24))
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.black.opacity(0.28))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(isTargeted ? Color.cyan.opacity(0.8) : .white.opacity(0.08), lineWidth: isTargeted ? 2 : 1)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(isTargeted ? Color.studioAccent : Color.studioBorder, lineWidth: isTargeted ? 2 : 1)
                     }
 
                 if let meshURL = activeMeshURL {
@@ -66,7 +66,7 @@ struct ModelPreviewCard: View {
                         performance: store.viewerPerformance,
                         displayScale: previewDisplayScale
                     )
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         .overlay(alignment: .top) {
                             ViewerToolbar(
                                 isFullScreen: isFullScreen,
@@ -93,7 +93,7 @@ struct ModelPreviewCard: View {
                                     .foregroundStyle(.cyan.opacity(0.9))
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .background(.black.opacity(0.42), in: Capsule())
+                                    .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                                     .padding(12)
                             }
                         }
@@ -110,7 +110,7 @@ struct ModelPreviewCard: View {
                                     .foregroundStyle(.cyan.opacity(0.9))
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .background(.black.opacity(0.42), in: Capsule())
+                                    .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                                     .padding(12)
                             }
                         }
@@ -135,7 +135,7 @@ struct ModelPreviewCard: View {
                                 .foregroundStyle(.cyan.opacity(0.7))
                         }
                         .padding(14)
-                        .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                        .background(.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .padding(12)
                     }
                 }
@@ -162,19 +162,19 @@ struct ModelPreviewCard: View {
             if let notice = store.inspection?.previewNotice {
                 Label(notice, systemImage: "memorychip")
                     .font(.caption)
-                    .foregroundStyle(.orange.opacity(0.82))
+                    .foregroundStyle(Color.studioWarning)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if store.isBuildingPreview || store.isPlanningPreview || store.isWorking {
                 Label(store.timingMessage, systemImage: "clock")
                     .font(.caption)
-                    .foregroundStyle(.cyan.opacity(0.72))
+                    .foregroundStyle(Color.studioAccent)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let reference = store.referenceURL {
                 Label("Visual target: \(reference.lastPathComponent)", systemImage: "scope")
                     .font(.caption)
-                    .foregroundStyle(.cyan.opacity(0.72))
+                    .foregroundStyle(Color.studioAccent)
                     .lineLimit(1)
             }
             if store.previewMode == .validation, let validation = store.result?.colorValidation {
@@ -183,7 +183,7 @@ struct ModelPreviewCard: View {
                     systemImage: validation.verified ? "checkmark.shield" : "exclamationmark.triangle"
                 )
                 .font(.caption)
-                .foregroundStyle(validation.verified ? .green.opacity(0.86) : .orange.opacity(0.88))
+                .foregroundStyle(validation.verified ? Color.studioSuccess : Color.studioWarning)
             }
             HStack(spacing: 12) {
                 if store.inspection?.metrics == nil {
@@ -194,7 +194,7 @@ struct ModelPreviewCard: View {
                     Spacer()
                     Text("\(metrics.triangleCount.formatted()) polygons | \(metrics.vertexCount.formatted()) vertices | \(ByteCountFormatter.string(fromByteCount: Int64(metrics.previewMemoryEstimateBytes), countStyle: .memory)) preview memory | ~\(String(format: "%.1f", metrics.previewBuildEstimateSeconds))s build")
                         .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.46))
+                        .foregroundStyle(Color.studioTertiaryText)
                 } else {
                     Spacer(minLength: 0)
                 }
@@ -304,34 +304,26 @@ private struct ViewerToolbar: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            Label("Drag to orbit. Scroll to zoom.", systemImage: "move.3d")
-                .labelStyle(.titleAndIcon)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.white.opacity(0.72))
-                .lineLimit(1)
-            Divider()
-                .frame(height: 16)
-                .overlay(.white.opacity(0.18))
             Button(action: reset) {
                 Image(systemName: "viewfinder")
-                    .frame(width: 22, height: 22)
+                    .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.cyan.opacity(0.9))
+            .foregroundStyle(Color.studioAccent)
             .help("Reset camera")
             Button(action: toggleFullScreen) {
                 Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                    .frame(width: 22, height: 22)
+                    .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.cyan.opacity(0.9))
+            .foregroundStyle(Color.studioAccent)
             .help("Toggle fullscreen viewer window")
         }
-        .frame(minHeight: 32, alignment: .center)
-        .padding(.horizontal, 12)
-        .background(.black.opacity(0.5), in: Capsule())
+        .frame(minHeight: 34, alignment: .center)
+        .padding(.horizontal, 8)
+        .background(.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay {
-            Capsule().stroke(.white.opacity(0.1), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.studioBorder, lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.22), radius: 12, y: 5)
     }
@@ -344,13 +336,13 @@ private struct EmptyDropPrompt: View {
         VStack(spacing: 16) {
             Image(systemName: isTargeted ? "square.and.arrow.down.fill" : "cube.transparent")
                 .font(.system(size: 45, weight: .light))
-                .foregroundStyle(isTargeted ? .cyan : .white.opacity(0.38))
+                .foregroundStyle(isTargeted ? Color.studioAccent : Color.studioTertiaryText)
             Text(isTargeted ? "Release to load file" : "Drop a painted .3mf, textured .obj or .glb here")
                 .font(.title3.weight(.medium))
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(Color.studioPrimaryText)
             Text("Images can also be added as visual references")
                 .font(.callout)
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(Color.studioTertiaryText)
         }
     }
 }
@@ -395,15 +387,11 @@ private struct SourcePaletteStrip: View {
 
 struct CardSurface: View {
     var body: some View {
-        RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .fill(.white.opacity(0.045))
-            .background {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(.ultraThinMaterial.opacity(0.2))
-            }
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(Color.studioPanel)
             .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(.white.opacity(0.08), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.studioBorder, lineWidth: 1)
             }
     }
 }

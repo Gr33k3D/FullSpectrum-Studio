@@ -10,10 +10,9 @@ The source project is never modified.
 This is an independent community release built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest public package: [v0.4.9 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.9).
-The current macOS H2C prerelease work is documented in
-[v0.4.12 macOS H2C notes](docs/RELEASE_NOTES_0.4.12_MACOS.md) and the
-[adaptive planner report](docs/reports/2026-06-01-macos-h2c-adaptive-planner-report.md).
+Latest public package: [v0.4.13 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.13).
+See the [v0.4.13 release notes](docs/RELEASE_NOTES_0.4.13.md) for the macOS
+workspace redesign, Windows Preview Plan support and palette-slot fix.
 
 ## What It Does
 
@@ -253,6 +252,8 @@ bundle signature; they are not Developer ID notarized.
 Windows uses the same Python conversion and validation engine in a compact
 desktop shell. Tagged releases build a portable ZIP and installer through
 [.github/workflows/windows-release.yml](.github/workflows/windows-release.yml).
+The Windows shell can run a dry Preview Plan before conversion and shows the
+selected anchors, quality, printability and warnings without writing a 3MF.
 The macOS orbitable analysis viewer is not present in the Windows UI.
 
 ## OrcaSlicer Handoff
@@ -315,6 +316,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
+- [0.4.13 Release Notes](docs/RELEASE_NOTES_0.4.13.md)
 - [0.4.12 macOS H2C Notes](docs/RELEASE_NOTES_0.4.12_MACOS.md)
 - [0.4.9 Release Notes](docs/RELEASE_NOTES_0.4.9.md)
 - [0.4.1 Reliability Notes](docs/RELEASE_NOTES_0.4.1.md)
