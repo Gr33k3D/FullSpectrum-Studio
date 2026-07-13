@@ -30,11 +30,11 @@ not repaint, smooth or clean up a badly painted model.
   and active progress reports when a deep search is still working rather than
   silently appearing frozen.
 
-## Seraphin private benchmark
+## Private benchmark
 
-The private Seraphin source model was used locally to validate this build. The
-source `.3mf`, reference `.glb` and generated model exports are not included in
-the repository or release notes.
+A private source model was used locally to validate this build. Its name,
+source `.3mf`, reference `.glb`, screenshots and generated exports are not
+included in the current repository tree.
 
 | Item | Result |
 | --- | --- |
@@ -49,7 +49,7 @@ the repository or release notes.
 | Estimated max Delta E | `10.94` |
 | Quality score | `96.8` |
 
-Screenshots and the full validation narrative are in
+The sanitized validation method is recorded in
 [the macOS H2C adaptive planner report](reports/2026-06-01-macos-h2c-adaptive-planner-report.md).
 
 ## Validation
@@ -57,8 +57,8 @@ Screenshots and the full validation narrative are in
 - `python3 -m unittest discover -s tests -v` passed: `45` tests.
 - `swift build` passed.
 - `./script/build_and_run.sh build` produced `dist/FullSpectrum Studio.app`.
-- The Desktop copy reports version `0.4.12`, build `14`.
-- `codesign --verify --deep --verbose=2` passed for the Desktop app bundle.
+- The packaged app reports version `0.4.12`, build `14`.
+- `codesign --verify --deep --verbose=2` passed for the packaged app bundle.
 
 ## Known limits
 

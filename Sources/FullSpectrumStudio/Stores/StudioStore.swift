@@ -129,6 +129,22 @@ final class StudioStore: ObservableObject {
     }
 
     var anchorCandidateOptions: [AnchorCandidate] {
+        let query = anchorSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let searched = query.isEmpty ? availableAnchorCandidates : availableAnchorCandidates.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+            || $0.series.localizedCaseInsensitiveContains(query)
+            || $0.color.localizedCaseInsensitiveContains(query)
+        }
+        return searched.sorted { lhs, rhs in
+            if pinnedAnchorKeys.contains(lhs.key) != pinnedAnchorKeys.contains(rhs.key) {
+                return pinnedAnchorKeys.contains(lhs.key)
+            }
+            if lhs.series != rhs.series { return lhs.series < rhs.series }
+            return lhs.name < rhs.name
+        }
+    }
+
+    private var availableAnchorCandidates: [AnchorCandidate] {
         guard anchorSelectionEnabled, let inventory else { return [] }
         let base: [AnchorCandidate]
         switch paletteSource {
@@ -156,20 +172,7 @@ final class StudioStore: ObservableObject {
             base = []
         }
         let families = Set(activeMaterialFamilies)
-        let familyFiltered = families.isEmpty ? base : base.filter { families.contains($0.series) }
-        let query = anchorSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let searched = query.isEmpty ? familyFiltered : familyFiltered.filter {
-            $0.name.localizedCaseInsensitiveContains(query)
-            || $0.series.localizedCaseInsensitiveContains(query)
-            || $0.color.localizedCaseInsensitiveContains(query)
-        }
-        return searched.sorted { lhs, rhs in
-            if pinnedAnchorKeys.contains(lhs.key) != pinnedAnchorKeys.contains(rhs.key) {
-                return pinnedAnchorKeys.contains(lhs.key)
-            }
-            if lhs.series != rhs.series { return lhs.series < rhs.series }
-            return lhs.name < rhs.name
-        }
+        return families.isEmpty ? base : base.filter { families.contains($0.series) }
     }
 
     var pinnedAnchorSummary: String {
@@ -459,8 +462,7 @@ final class StudioStore: ObservableObject {
             return
         }
         referenceURL = url
-        result = nil
-        planPreview = nil
+        invalidateGeneratedPlan()
         status = "Reference selected: \(url.lastPathComponent). Load or convert a 3MF to score it."
     }
 
@@ -470,13 +472,13 @@ final class StudioStore: ObservableObject {
         } else {
             selectedMaterialFamilies.insert(series)
         }
-        planPreview = nil
+        invalidateGeneratedPlan()
         pruneUnavailableSelections()
     }
 
     func clearMaterialFamilies() {
         selectedMaterialFamilies.removeAll()
-        planPreview = nil
+        invalidateGeneratedPlan()
         pruneUnavailableSelections()
     }
 
@@ -484,14 +486,19 @@ final class StudioStore: ObservableObject {
         if pinnedAnchorKeys.contains(candidate.key) {
             pinnedAnchorKeys.remove(candidate.key)
         } else {
+            let maximum = Int(realSlots.rawValue) ?? 6
+            guard pinnedAnchorKeys.count < maximum else {
+                present(message: "This plan allows at most \(maximum) pinned physical anchors. Increase Physical slots or unpin another color.")
+                return
+            }
             pinnedAnchorKeys.insert(candidate.key)
         }
-        planPreview = nil
+        invalidateGeneratedPlan()
     }
 
     func clearAnchorPins() {
         pinnedAnchorKeys.removeAll()
-        planPreview = nil
+        invalidateGeneratedPlan()
     }
 
     func useRecommendedAnchors() {
@@ -499,13 +506,35 @@ final class StudioStore: ObservableObject {
         let keys = anchors.compactMap(\.key)
         guard !keys.isEmpty else { return }
         pinnedAnchorKeys = Set(keys)
-        planPreview = nil
-        status = "Pinned \(keys.count) recommended Bambu anchors. Preview or compose again to lock them in."
+        invalidateGeneratedPlan(statusMessage: "Pinned \(keys.count) recommended Bambu anchors. Preview or compose again to lock them in.")
     }
 
     func plannerInputsChanged() {
-        planPreview = nil
+        let maximum = Int(realSlots.rawValue) ?? 6
+        if pinnedAnchorKeys.count > maximum {
+            pinnedAnchorKeys = Set(pinnedAnchorKeys.sorted().prefix(maximum))
+        }
+        invalidateGeneratedPlan()
         pruneUnavailableSelections()
+    }
+
+    private func invalidateGeneratedPlan(statusMessage: String? = nil) {
+        let hadGeneratedPlan = result != nil || planPreview != nil
+        result = nil
+        planPreview = nil
+        outputPreviewTask?.cancel()
+        outputPreviewTask = nil
+        outputPreviewMeshURL = nil
+        heatmapMeshURL = nil
+        anchorInfluenceMeshURL = nil
+        if ![PreviewMode.original, .plateImage].contains(previewMode) {
+            previewMode = previewMeshURL == nil && previewImage != nil ? .plateImage : .original
+        }
+        if let statusMessage {
+            status = statusMessage
+        } else if hadGeneratedPlan && !isWorking && !isPlanningPreview {
+            status = "Settings changed. Preview or compose the palette again."
+        }
     }
 
     func acceptCustomPalette(url: URL) {
@@ -515,8 +544,7 @@ final class StudioStore: ObservableObject {
         }
         customPaletteURL = url
         paletteSource = .custom
-        result = nil
-        planPreview = nil
+        invalidateGeneratedPlan()
     }
 
     func acceptTextureOverride(url: URL) {
@@ -525,8 +553,7 @@ final class StudioStore: ObservableObject {
             return
         }
         textureOverrideURL = url
-        result = nil
-        planPreview = nil
+        invalidateGeneratedPlan()
         if let selectedFile, selectedFile.pathExtension.lowercased() == "obj" {
             accept(url: selectedFile)
         }
@@ -545,8 +572,7 @@ final class StudioStore: ObservableObject {
         isWorking = false
         errorMessage = nil
         errorReport = nil
-        result = nil
-        planPreview = nil
+        invalidateGeneratedPlan()
         progress = 0
         progressMessage = "Starting palette plan preview."
         activityMessages = ["Starting palette plan preview."]
@@ -648,7 +674,7 @@ final class StudioStore: ObservableObject {
         isPlanningPreview = false
         errorMessage = nil
         errorReport = nil
-        planPreview = nil
+        invalidateGeneratedPlan()
         progress = 0
         progressMessage = "Starting conversion."
         activityMessages = ["Starting conversion."]
@@ -1202,7 +1228,7 @@ final class StudioStore: ObservableObject {
             pinnedAnchorKeys.removeAll()
             return
         }
-        let availableKeys = Set(anchorCandidateOptions.map(\.key))
+        let availableKeys = Set(availableAnchorCandidates.map(\.key))
         pinnedAnchorKeys = pinnedAnchorKeys.filter { availableKeys.contains($0) }
     }
 

@@ -133,6 +133,19 @@ class PaintCodecTests(unittest.TestCase):
         self.assertEqual(referenced, [4])
         self.assertEqual(mapped, "8")
 
+    def test_eight_digit_color_preserves_32_slot_paint_reference(self):
+        colors = ["#00000000"] + [f"#{slot:06X}" for slot in range(1, 32)]
+        parsed = ENGINE.colors_from_project({"filament_colour": colors})
+
+        self.assertEqual(len(parsed), 32)
+        self.assertEqual(parsed[0], "#000000")
+        self.assertEqual(parsed[-1], "#00001F")
+        self.assertEqual(ENGINE.paint_slot_usage({"EFC": 2}, len(parsed)), {32: 2})
+
+    def test_invalid_project_color_reports_slot_instead_of_shifting_palette(self):
+        with self.assertRaisesRegex(RuntimeError, "filament_colour slot 2"):
+            ENGINE.colors_from_project({"filament_colour": ["#FFFFFF", "not-a-color", "#000000"]})
+
     def test_ciede2000_uses_standard_reference_pair(self):
         difference = ENGINE.delta_e_2000((50, 2.6772, -79.7751), (50, 0, -82.7485))
         self.assertAlmostEqual(difference, 2.0425, places=3)

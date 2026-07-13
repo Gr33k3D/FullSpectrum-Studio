@@ -14,10 +14,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+MODULE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+if str(MODULE_ROOT) not in sys.path:
+    sys.path.insert(0, str(MODULE_ROOT))
+
+from desktop.app_support import APP_ROOT, APP_VERSION, format_plan_preview
+
 
 def load_engine():
-    root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
-    engine_path = root / "fullspectrum_engine.py"
+    engine_path = APP_ROOT / "fullspectrum_engine.py"
+    root_path = str(APP_ROOT)
+    if root_path not in sys.path:
+        sys.path.insert(0, root_path)
     spec = importlib.util.spec_from_file_location("fullspectrum_engine", engine_path)
     engine = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(engine)
@@ -30,9 +38,9 @@ ENGINE = load_engine()
 class StudioApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("FullSpectrum Studio")
-        self.geometry("980x690")
-        self.minsize(820, 560)
+        self.title(f"FullSpectrum Studio {APP_VERSION}")
+        self.geometry("1080x820")
+        self.minsize(860, 620)
         self.configure(bg="#101721")
         self.project = tk.StringVar()
         self.reference = tk.StringVar()
@@ -40,6 +48,7 @@ class StudioApp(tk.Tk):
         self.custom = tk.StringVar()
         self.strategy = tk.StringVar(value="official")
         self.planner_mode = tk.StringVar(value="best")
+        self.planning_sample = tk.StringVar(value="paint")
         self.source = tk.StringVar(value="inventory")
         self.catalog_region = tk.StringVar(value="global")
         self.real_slots = tk.StringVar(value="auto")
@@ -56,6 +65,7 @@ class StudioApp(tk.Tk):
         self.last_engine_message = "Waiting for a model."
         self.last_error_report = ""
         self.last_error_log = None
+        self.operation_name = "Operation"
         self._build()
 
     def _build(self):
@@ -68,9 +78,22 @@ class StudioApp(tk.Tk):
         style.map("TCombobox", foreground=[("readonly", "#f6fbff")], fieldbackground=[("readonly", "#182331")], selectforeground=[("readonly", "#f6fbff")], selectbackground=[("readonly", "#182331")])
         style.configure("Title.TLabel", font=("Segoe UI", 22, "bold"), foreground="#f6fbff")
         style.configure("Small.TLabel", foreground="#9cb4c5")
-        frame = ttk.Frame(self, padding=24)
-        frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="FullSpectrum Studio", style="Title.TLabel").pack(anchor="w")
+        shell = ttk.Frame(self)
+        shell.pack(fill="both", expand=True)
+        canvas = tk.Canvas(shell, bg="#101721", highlightthickness=0, borderwidth=0)
+        scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        frame = ttk.Frame(canvas, padding=24)
+        content_window = canvas.create_window((0, 0), window=frame, anchor="nw")
+        frame.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(content_window, width=event.width))
+        self.content_canvas = canvas
+        title_row = ttk.Frame(frame)
+        title_row.pack(fill="x")
+        ttk.Label(title_row, text="FullSpectrum Studio", style="Title.TLabel").pack(side="left")
+        ttk.Label(title_row, text=f"v{APP_VERSION}", style="Small.TLabel").pack(side="right")
         ttk.Label(frame, text="Local reduced-filament workflow for painted Bambu projects", style="Small.TLabel").pack(anchor="w", pady=(0, 22))
         ttk.Label(
             frame,
@@ -97,6 +120,7 @@ class StudioApp(tk.Tk):
         self.combo(choices, "Filaments", self.source, ["inventory", "catalog", "all-bambu", "custom", "exact-cmykw"], 2, 0)
         self.combo(choices, "Physical slots", self.real_slots, ["auto", "2", "3", "4", "5", "6", "7", "8"], 0, 1)
         self.combo(choices, "Catalog region", self.catalog_region, ["global", "eu", "us-ca", "uk", "au-nz", "asia"], 1, 1)
+        self.combo(choices, "Planning sample", self.planning_sample, ["paint", "preview"], 2, 1)
         ttk.Label(
             frame,
             text="Catalog region is planning metadata only; FullSpectrum does not check live Bambu store stock.",
@@ -125,8 +149,10 @@ class StudioApp(tk.Tk):
         ttk.Label(frame, textvariable=self.status, style="Small.TLabel").pack(anchor="w")
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x", pady=18)
+        self.preview_button = ttk.Button(buttons, text="Preview Plan", command=self.preview_plan)
+        self.preview_button.pack(side="left")
         self.convert_button = ttk.Button(buttons, text="Convert and Validate", command=self.convert)
-        self.convert_button.pack(side="left")
+        self.convert_button.pack(side="left", padx=(8, 0))
         self.cancel_button = ttk.Button(buttons, text="Cancel", command=self.cancel_conversion, state="disabled")
         self.cancel_button.pack(side="left", padx=8)
         self.folder_button = ttk.Button(buttons, text="Show Output", command=self.open_folder, state="disabled")
@@ -163,7 +189,13 @@ class StudioApp(tk.Tk):
             self.custom.set(path)
             self.source.set("custom")
 
+    def preview_plan(self):
+        self.start_operation(plan_only=True)
+
     def convert(self):
+        self.start_operation(plan_only=False)
+
+    def start_operation(self, plan_only):
         source = Path(self.project.get())
         if not source.is_file() or source.suffix.lower() not in (".3mf", ".obj", ".glb"):
             messagebox.showerror("FullSpectrum Studio", "Choose a painted Bambu .3mf or textured OBJ / GLB source first.")
@@ -171,8 +203,10 @@ class StudioApp(tk.Tk):
         if self.source.get() == "custom" and not Path(self.custom.get()).is_file():
             messagebox.showerror("FullSpectrum Studio", "Choose a custom filament JSON library.")
             return
+        self.preview_button.configure(state="disabled")
         self.convert_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
+        self.folder_button.configure(state="disabled")
         self.copy_error_button.configure(state="disabled")
         self.output.delete("1.0", "end")
         self.progress.set(0)
@@ -180,13 +214,15 @@ class StudioApp(tk.Tk):
         self.worker_active = True
         self.last_error_report = ""
         self.last_error_log = None
-        self.record_progress(0, "Starting conversion.")
+        self.operation_name = "Plan preview" if plan_only else "Conversion"
+        self.record_progress(0, "Starting plan preview." if plan_only else "Starting conversion.")
         self.start_heartbeat()
         options = {
             "strategy": self.strategy.get(),
             "source": self.source.get(),
             "catalog_region": self.catalog_region.get(),
             "planner_mode": self.planner_mode.get(),
+            "planning_sample": self.planning_sample.get(),
             "real_slots": self.real_slots.get(),
             "quality_bias": "auto" if self.smart_quality.get() else self.quality_bias.get(),
             "mix_model": self.mix_model.get(),
@@ -196,12 +232,12 @@ class StudioApp(tk.Tk):
             "auto_open": self.auto_open.get(),
             "output_application": self.output_application.get(),
         }
-        threading.Thread(target=self._run_conversion, args=(source, options), daemon=True).start()
+        threading.Thread(target=self._run_operation, args=(source, options, plan_only), daemon=True).start()
 
-    def _run_conversion(self, source, options):
+    def _run_operation(self, source, options, plan_only):
         def report(fraction, message):
             if self.cancel_requested:
-                raise RuntimeError("Conversion cancelled by user.")
+                raise RuntimeError("Operation cancelled by user.")
             self.last_progress_time = time.monotonic()
             self.last_engine_message = message
             self.after(0, lambda: self.record_progress(fraction, message))
@@ -219,9 +255,15 @@ class StudioApp(tk.Tk):
                 quality_bias=options["quality_bias"],
                 catalog_region=options["catalog_region"],
                 planner_mode=options["planner_mode"],
+                planning_sample=options["planning_sample"],
                 mix_model=options["mix_model"],
+                plan_only=plan_only,
                 progress=report,
             )
+            if plan_only:
+                text = format_plan_preview(result)
+                self.after(0, lambda: self.finish_plan(text))
+                return
             text = [
                 f"Validated output: {result['output']}",
                 f"Physical slots: {result['realSlots']}   Mixed slots: {result['outputSlots'] - result['realSlots']}",
@@ -247,6 +289,7 @@ class StudioApp(tk.Tk):
 
     def finish(self, text):
         self.worker_active = False
+        self.preview_button.configure(state="normal")
         self.output.insert("1.0", text)
         self.status.set("Conversion validated and ready.")
         self.progress.set(100)
@@ -254,9 +297,21 @@ class StudioApp(tk.Tk):
         self.cancel_button.configure(state="disabled")
         self.folder_button.configure(state="normal")
 
+    def finish_plan(self, text):
+        self.worker_active = False
+        self.output.insert("1.0", text)
+        self.status.set("Plan preview ready. No 3MF was written.")
+        self.progress.set(100)
+        self.preview_button.configure(state="normal")
+        self.convert_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
+        self.folder_button.configure(state="disabled")
+
     def fail(self, message, details=None):
         self.worker_active = False
-        self.status.set("Conversion cancelled." if self.cancel_requested else "Conversion failed.")
+        suffix = "cancelled." if self.cancel_requested else "failed."
+        self.status.set(f"{self.operation_name} {suffix}")
+        self.preview_button.configure(state="normal")
         self.convert_button.configure(state="normal")
         self.cancel_button.configure(state="disabled")
         self.copy_error_button.configure(state="normal")
