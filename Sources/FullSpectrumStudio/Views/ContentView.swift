@@ -84,7 +84,7 @@ struct ContentView: View {
                 Button("Copy Error Report") { store.copyErrorReport() }
             }
             if store.errorReport?.logURL != nil {
-                Button("Open Debug Log") { store.openErrorLog() }
+                Button("Open Private Log") { store.openErrorLog() }
             }
             Button("OK", role: .cancel) { store.clearError() }
         } message: {

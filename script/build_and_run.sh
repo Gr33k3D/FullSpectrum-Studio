@@ -88,7 +88,7 @@ cat >"$INFO_PLIST" <<PLIST
   <key>CFBundleVersion</key>
   <string>$APP_BUILD</string>
   <key>CFBundleGetInfoString</key>
-  <string>macOS H2C adaptive planner prerelease</string>
+  <string>Local palette planner and Bambu 3MF converter</string>
   <key>LSMinimumSystemVersion</key>
   <string>$MIN_SYSTEM_VERSION</string>
   <key>NSPrincipalClass</key>
@@ -140,9 +140,25 @@ strict_verify_bundle() {
   fi
 }
 
+verify_distributable_archive() {
+  local temp_dir archive_path extracted_app
+  temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/fullspectrum-release.XXXXXX")"
+  archive_path="$temp_dir/FullSpectrum-Studio-macOS.zip"
+  extracted_app="$temp_dir/extracted/$APP_NAME.app"
+  mkdir -p "$temp_dir/extracted"
+  /usr/bin/ditto -c -k --norsrc --keepParent "$APP_BUNDLE" "$archive_path"
+  /usr/bin/ditto -x -k "$archive_path" "$temp_dir/extracted"
+  if ! /usr/bin/codesign --verify --deep --strict --verbose=2 "$extracted_app"; then
+    rm -rf "$temp_dir"
+    return 1
+  fi
+  rm -rf "$temp_dir"
+}
+
 case "$MODE" in
   build|--build)
     strict_verify_bundle
+    verify_distributable_archive
     echo "$APP_NAME built at $APP_BUNDLE."
     ;;
   run)

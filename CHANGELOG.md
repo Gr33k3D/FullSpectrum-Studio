@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.14 Official Release - 2026-07-14
+
+### Fixed
+
+- Makes worst-case visible color error count more strongly during automatic
+  anchor selection, preserving small black, white and other high-contrast
+  details instead of letting large painted regions dominate the plan.
+- Caps the displayed quality score by the largest visible color error so a
+  plan with one badly shifted detail is no longer reported as high quality.
+- Includes object- and part-level filament assignments in planning even when
+  those regions do not contain explicit painted facets.
+- Stops unused source colors from creating unused mixed-recipe slots.
+
+### Compatibility And Privacy
+
+- Adds regression coverage for H2C two-nozzle slot arrays and for a second
+  conversion after adding or repainting a physical color.
+- Keeps Bambu's valid automatic object-filament assignment at slot zero.
+- Updates Windows packaging to Pillow `12.3.0`, which fixes the vulnerabilities
+  disclosed against `12.2.0`, and runs `pip-audit` in the release workflow.
+- Reopens and verifies the packaged macOS ZIP so release validation covers the
+  distributable archive as well as the working app bundle.
+- Makes copied macOS and Windows error reports privacy-safe by excluding local
+  paths, model names, inventory data and raw engine output. Detailed logs stay
+  local and are labeled private.
+- Shows both mean and maximum estimated color error in macOS and Windows plan
+  results.
+
 ## 0.4.13 Official Release - 2026-07-13
 
 ### Desktop Apps

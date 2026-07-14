@@ -25,6 +25,7 @@ class WindowsDesktopTests(unittest.TestCase):
             "quality": {
                 "qualityScore": 88.5,
                 "estimatedDeltaE": 4.2,
+                "maximumDeltaE": 8.4,
                 "confidenceScore": 82.0,
             },
             "printability": {
@@ -39,8 +40,27 @@ class WindowsDesktopTests(unittest.TestCase):
 
         self.assertIn("No 3MF was written", summary)
         self.assertIn("Physical slots: 3   Mixed slots: 4", summary)
+        self.assertIn("Max dE: 8.40", summary)
         self.assertIn("1: Black (#000000)", summary)
         self.assertIn("Warning: One source color", summary)
+
+    def test_shareable_error_report_excludes_private_diagnostics(self):
+        report = app_support.format_shareable_error_report(
+            "Could not convert C:\\Users\\Example\\Private Model.3mf; "
+            'inventory={"spools":[{"remainingGrams":123}]}',
+            log_created=True,
+        )
+
+        self.assertNotIn("Private Model", report)
+        self.assertNotIn("remainingGrams", report)
+        self.assertNotIn("C:\\Users", report)
+        self.assertIn("private local log", report)
+        self.assertIn("were excluded", report)
+
+        ordinary_report = app_support.format_shareable_error_report(
+            "A privately named object could not be decoded."
+        )
+        self.assertNotIn("privately named object", ordinary_report.lower())
 
 
 if __name__ == "__main__":

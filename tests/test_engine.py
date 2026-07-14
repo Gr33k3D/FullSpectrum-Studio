@@ -516,6 +516,65 @@ class ConversionTests(unittest.TestCase):
         best=ENGINE.build_palette([target],anchors,{1:100},100,planner_mode="best")[-1][0]
         self.assertLessEqual(float(best[8]),float(fast[8]))
 
+    def test_auto_planner_preserves_small_black_and_white_details(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            palette = Path(folder_name) / "palette.json"
+            candidates = [
+                {"name": name, "color": color}
+                for name, color in ENGINE.BAMBU_PLA
+            ] + [
+                {"name": "Pumpkin", "color": "#FF9016"},
+                {"name": "Maroon", "color": "#9D2235"},
+                {"name": "Mistletoe", "color": "#3F8E43"},
+                {"name": "Current Dark Blue", "color": "#042F56"},
+                {"name": "Current Lemon", "color": "#F7D959"},
+            ]
+            palette.write_text(json.dumps(candidates))
+            old_colors = ["#FFFFFF", "#000000", "#FF9016", "#14676D", "#9D2235"]
+            usage = {1: 8320, 2: 2912, 3: 86768, 4: 120656, 5: 25536}
+
+            anchors = ENGINE.select_anchors(
+                old_colors,
+                usage,
+                "official",
+                {"spools": []},
+                "custom",
+                "auto",
+                custom_catalog_path=palette,
+                quality_bias=60,
+            )
+            rows = ENGINE.build_palette(old_colors, anchors, usage, 60)[-1]
+            metrics = ENGINE.quality_metrics(rows, usage, old_colors)
+            selected = {ENGINE.anchor_color(anchor) for anchor in anchors}
+
+            self.assertIn("#000000", selected)
+            self.assertIn("#FFFFFF", selected)
+            self.assertLess(metrics["maximumDeltaE"], 6.0)
+
+    def test_quality_score_is_capped_by_worst_visible_error(self):
+        rows = [
+            [1, 1, "#000000", "ANCHOR", "Black", "", "", "#000000", "0.00", "0.00", "0.00"],
+            [2, 1, "#FFFFFF", "ANCHOR", "Black", "", "", "#000000", "30.00", "30.00", "0.00"],
+        ]
+        metrics = ENGINE.quality_metrics(rows, {1: 1000, 2: 1}, ["#000000", "#FFFFFF"])
+
+        self.assertEqual(metrics["maximumDeltaE"], 30.0)
+        self.assertLessEqual(metrics["qualityScore"], 64.0)
+
+    def test_unused_source_color_does_not_create_an_unused_mix_slot(self):
+        anchors = [
+            {"name": "Black", "color": "#000000"},
+            {"name": "White", "color": "#FFFFFF"},
+        ]
+        used = ENGINE.mix(["#000000", "#FFFFFF"], [0.5, 0.5])
+        unused = ENGINE.mix(["#000000", "#FFFFFF"], [0.25, 0.75])
+
+        palette = ENGINE.build_palette([used, unused], anchors, {1: 100, 2: 0}, 100)
+
+        self.assertEqual(len(palette[0]), 3)
+        self.assertEqual(palette[-1][0][3], "MIX")
+        self.assertEqual(palette[-1][1][3], "ANCHOR")
+
     def test_smart_quality_bias_runs_multiple_plans_and_reports_selected_value(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.3mf"
@@ -794,6 +853,93 @@ class ConversionTests(unittest.TestCase):
         obj["flush_volumes_matrix"] = ["0", "0", "120", "0"]
         with self.assertRaisesRegex(RuntimeError, "zero off-diagonal"):
             ENGINE.validate_arrays(obj, 2, 2, {"flush_volumes_matrix": ("matrix", 1)}, None)
+
+    def test_h2c_two_nozzle_arrays_resize_as_complete_slot_blocks(self):
+        old_colors = ["#9D2235", "#042F56", "#F7D959", "#FF9016", "#000000", "#1D6569"]
+        old_count = len(old_colors)
+        matrix_block = [
+            "0" if row == column else str(100 + row * old_count + column)
+            for row in range(old_count)
+            for column in range(old_count)
+        ]
+        obj = {
+            "filament_colour": old_colors[:],
+            "filament_self_index": [str(slot) for slot in range(1, old_count + 1) for _ in range(2)],
+            "filament_retraction_length": [f"{slot}.{nozzle}" for slot in range(1, old_count + 1) for nozzle in range(2)],
+            "flush_volumes_vector": [str(140 + index) for index in range(old_count * 2)],
+            "flush_volumes_matrix": matrix_block + matrix_block,
+        }
+        layouts = ENGINE.filament_array_layouts(obj, old_count)
+        representatives = [1, 2, 3, 4, 6]
+        new_colors = [old_colors[index - 1] for index in representatives]
+
+        ENGINE.resize_project_filament_arrays(
+            obj, old_count, representatives, layouts, old_colors, new_colors
+        )
+
+        self.assertEqual(layouts["flush_volumes_matrix"], ("matrix", 2))
+        self.assertEqual(layouts["flush_volumes_vector"], ("slot", 2))
+        self.assertEqual(len(obj["flush_volumes_matrix"]), 2 * len(representatives) ** 2)
+        self.assertEqual(len(obj["flush_volumes_vector"]), 2 * len(representatives))
+        self.assertEqual(len(obj["filament_retraction_length"]), 2 * len(representatives))
+        self.assertEqual(
+            obj["filament_self_index"],
+            [str(slot) for slot in range(1, len(representatives) + 1) for _ in range(2)],
+        )
+
+    def test_model_extruder_assignment_keeps_unpainted_slot_in_planning(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            metadata = folder / "Metadata"
+            metadata.mkdir()
+            (metadata / "model_settings.config").write_text(
+                '<config><object id="1"><metadata key="extruder" value="4"/></object></config>'
+            )
+
+            slots = ENGINE.model_setting_extruder_slots(folder, 4)
+            usage = ENGINE.include_model_extruder_usage({1: 1000}, slots)
+
+            self.assertEqual(slots, {4})
+            self.assertGreater(usage[4], 0)
+
+    def test_model_extruder_assignment_ignores_automatic_slot_zero(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            metadata = folder / "Metadata"
+            metadata.mkdir()
+            (metadata / "model_settings.config").write_text(
+                '<config><object id="1"><metadata key="extruder" value="0"/></object></config>'
+            )
+
+            self.assertEqual(ENGINE.model_setting_extruder_slots(folder, 4), set())
+
+    def test_automatic_slot_zero_survives_conversion_and_validation(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            source = folder / "source.3mf"
+            write_project(source)
+            model_settings = (
+                '<config><object id="1"><metadata key="extruder" value="0"/></object></config>'
+            )
+            with zipfile.ZipFile(source, "a", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("Metadata/model_settings.config", model_settings)
+
+            output = ENGINE.convert(
+                source,
+                "official",
+                palette_source="catalog",
+                real_slots="2",
+                output_dir=folder,
+                reveal=False,
+            )
+
+            with zipfile.ZipFile(output["output"]) as archive:
+                root = ENGINE.ET.fromstring(archive.read("Metadata/model_settings.config"))
+            extruder = next(
+                metadata for metadata in root.iter("metadata")
+                if metadata.get("key") == "extruder"
+            )
+            self.assertEqual(extruder.get("value"), "0")
 
     def test_validator_rejects_saved_mixed_color_that_bambu_will_replace(self):
         obj = settings(3)

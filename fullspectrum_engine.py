@@ -101,6 +101,9 @@ MIN_MIX_GAIN = 1.0
 MAX_RELIABLE_MIX_DE = 8.0
 MAX_HIGH_QUALITY_MIX_DE = 14.0
 CMYKW_ROLE_WARNING_DE = 10.0
+PALETTE_MAX_ERROR_WEIGHT = 0.06
+QUALITY_MAX_ERROR_WEIGHT = 1.2
+MODEL_EXTRUDER_USAGE_FRACTION = 0.002
 MAX_BAMBU_PAINT_SLOT = 32
 PREVIEW_GRID_RESOLUTION = 72
 MIN_REAL_SLOTS = 2
@@ -124,7 +127,7 @@ def release_version():
             return value
     except OSError:
         pass
-    return "0.4.13"
+    return "0.4.14"
 
 
 APP_VERSION = release_version()
@@ -2083,7 +2086,7 @@ def palette_selection_score(old_colors, usage, anchors, quality_bias, mix_model=
     practical_pressure=(100-clamp_quality_bias(quality_bias))/100
     score=(
         metrics["estimatedDeltaE"]
-        + metrics["maximumDeltaE"]*0.035
+        + metrics["maximumDeltaE"]*PALETTE_MAX_ERROR_WEIGHT
         + mixed_slots*(0.05+0.12*practical_pressure)
         + mixed_share*(0.45+0.55*practical_pressure)
         + weak_share*3.0
@@ -2360,7 +2363,7 @@ def build_palette(old_colors, anchors, usage=None, quality_bias=DEFAULT_QUALITY_
         old_slot_to_new_slot[old_slot]=direct_slot
         rows_by_slot[old_slot]=[old_slot,direct_slot,target,"ANCHOR",direct_name,"","",
                                 direct_hex,f"{direct_err:.2f}",f"{direct_err:.2f}","0.00"]
-        if direct_err>DIRECT_ANCHOR_DE and gain>=min_gain and mix_err<=mix_limit:
+        if weight>0 and direct_err>DIRECT_ANCHOR_DE and gain>=min_gain and mix_err<=mix_limit:
             mix_candidates.append((gain*weight,gain,old_slot,target,cs,rs,preview,mix_err,direct_err))
     recipes={}
     for _,gain,old_slot,target,cs,rs,preview,mix_err,direct_err in sorted(mix_candidates,reverse=True):
@@ -2409,10 +2412,12 @@ def quality_metrics(rows, usage, old_colors=None, reference=None, mix_model="bam
     errors=[(float(row[8]),weights[row[0]]) for row in rows if weights[row[0]]>0]
     estimated=sum(error*weight for error,weight in errors)/total
     maximum=max((error for error,_ in errors),default=0.0)
+    mean_score=max(0.0,100.0-estimated*2.2)
+    maximum_score=max(0.0,100.0-maximum*QUALITY_MAX_ERROR_WEIGHT)
     result={
         "estimatedDeltaE":round(estimated,2),
         "maximumDeltaE":round(maximum,2),
-        "qualityScore":round(max(0.0,100.0-estimated*2.2),1),
+        "qualityScore":round(min(mean_score,maximum_score),1),
     }
     predictions={row[0]:row[7] for row in rows}
     if old_colors:
@@ -2617,7 +2622,7 @@ def smart_quality_plan_score(metrics, rows, usage, real_count, output_count, qua
     practical_pressure=(100-clamp_quality_bias(quality_bias))/100
     return (
         metrics["estimatedDeltaE"]*2.4
-        + metrics["maximumDeltaE"]*0.05
+        + metrics["maximumDeltaE"]*PALETTE_MAX_ERROR_WEIGHT
         + mixed_slots*(0.16+0.18*practical_pressure)
         + mixed_share*(1.1+0.8*practical_pressure)
         + real_count*0.18
@@ -2811,6 +2816,37 @@ def remap_model_setting_extruders(tmp, old_slot_to_new_slot):
         ET.indent(tree,space="  ")
         tree.write(path,encoding="UTF-8",xml_declaration=True)
     return changed
+
+def model_setting_extruder_slots(tmp, slot_count):
+    path=tmp/"Metadata"/"model_settings.config"
+    if not path.exists():
+        return set()
+    try:
+        root=ET.parse(path).getroot()
+    except (ET.ParseError,OSError) as exc:
+        raise RuntimeError("Could not read source object filament assignments") from exc
+    slots=set()
+    for metadata in root.iter("metadata"):
+        if metadata.get("key") != "extruder":
+            continue
+        try:
+            slot=int(metadata.get("value","0"))
+        except ValueError as exc:
+            raise RuntimeError("Source object has an invalid extruder assignment") from exc
+        if slot == 0:
+            continue
+        if slot < 0 or slot > slot_count:
+            raise RuntimeError(f"Source object references missing extruder slot {slot}")
+        slots.add(slot)
+    return slots
+
+def include_model_extruder_usage(paint_usage, extruder_slots):
+    usage=Counter(paint_usage or {})
+    marker=max(1.0,sum(usage.values())*MODEL_EXTRUDER_USAGE_FRACTION)
+    for slot in extruder_slots:
+        if usage.get(slot,0) <= 0:
+            usage[slot]=marker
+    return usage
 
 NONPREFIX_FILAMENT_ARRAY_KEYS = {
     "activate_air_filtration",
@@ -3057,7 +3093,9 @@ def validate_output_archive(outfile,newn,real_count,layouts,source_off_diagonal_
             for metadata in root.iter("metadata"):
                 if metadata.get("key") == "extruder":
                     slot=int(metadata.get("value","0"))
-                    if slot < 1 or slot > newn:
+                    if slot == 0:
+                        continue
+                    if slot < 0 or slot > newn:
                         raise RuntimeError(f"Object metadata references missing extruder slot {slot}")
         preservation_result=verify_preservation(archive,preservation) if preservation else None
         if preservation_result is not None:
@@ -3147,6 +3185,8 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         progress(0.19,"Collecting existing Bambu paint states")
         ordered_codes, code_counts=collect_paint_codes(tmp)
         paint_usage=paint_slot_usage(code_counts, oldn)
+        object_extruders=model_setting_extruder_slots(tmp,oldn)
+        paint_usage=include_model_extruder_usage(paint_usage,object_extruders)
         usage=paint_usage
         if planning_sample=="preview":
             progress(0.205,"Sampling optimized preview mesh for visual color weighting")

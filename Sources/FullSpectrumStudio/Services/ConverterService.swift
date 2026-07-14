@@ -9,7 +9,7 @@ enum ConverterError: LocalizedError {
         case .engineMissing:
             return "The conversion engine is missing from the application bundle."
         case .processFailure(let message, _, _):
-            return message
+            return DiagnosticPrivacy.safeMessage(message)
         }
     }
 
@@ -290,7 +290,7 @@ struct ConverterService {
                 )
                 throw ConverterError.processFailure(
                     message: message,
-                    debugReport: Self.debugReport(message: message, logURL: logURL, stdout: outputData, stderr: diagnosticsData),
+                    debugReport: Self.debugReport(message: message, logURL: logURL),
                     logURL: logURL
                 )
             }
@@ -308,7 +308,7 @@ struct ConverterService {
                 )
                 throw ConverterError.processFailure(
                     message: message,
-                    debugReport: Self.debugReport(message: message, logURL: logURL, stdout: outputData, stderr: diagnosticsData),
+                    debugReport: Self.debugReport(message: message, logURL: logURL),
                     logURL: logURL
                 )
             }
@@ -377,20 +377,8 @@ struct ConverterService {
         return pieces.joined(separator: "\n")
     }
 
-    private static func debugReport(message: String, logURL: URL?, stdout: Data, stderr: Data) -> String {
-        [
-            "FullSpectrum Studio conversion error",
-            "",
-            message,
-            "",
-            logURL.map { "Debug log: \($0.path)" } ?? "Debug log: unavailable",
-            "",
-            "Engine stderr tail:",
-            tail(text(stderr), maxCharacters: 2_400),
-            "",
-            "Engine stdout tail:",
-            tail(text(stdout), maxCharacters: 2_400)
-        ].joined(separator: "\n")
+    private static func debugReport(message: String, logURL: URL?) -> String {
+        DiagnosticPrivacy.shareableErrorReport(message: message, logCreated: logURL != nil)
     }
 
     private static func writeDebugLog(arguments: [String], terminationStatus: Int32, stdout: Data, stderr: Data, decodeError: Error?) -> URL? {

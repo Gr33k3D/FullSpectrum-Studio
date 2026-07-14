@@ -975,9 +975,10 @@ final class StudioStore: ObservableObject {
     }
 
     func copyErrorReport() {
+        guard let details = errorReport?.details else { return }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(errorReport?.details ?? errorMessage ?? "", forType: .string)
+        pasteboard.setString(details, forType: .string)
     }
 
     func openErrorLog() {
@@ -992,13 +993,15 @@ final class StudioStore: ObservableObject {
            let debugReport = converterError.debugReport {
             errorReport = StudioErrorReport(message: message, details: debugReport, logURL: converterError.logURL)
         } else {
-            errorReport = StudioErrorReport(message: message, details: message, logURL: nil)
+            let details = DiagnosticPrivacy.shareableErrorReport(message: message, logCreated: false)
+            errorReport = StudioErrorReport(message: message, details: details, logURL: nil)
         }
     }
 
     private func present(message: String) {
         errorMessage = message
-        errorReport = StudioErrorReport(message: message, details: message, logURL: nil)
+        let details = DiagnosticPrivacy.shareableErrorReport(message: message, logCreated: false)
+        errorReport = StudioErrorReport(message: message, details: details, logURL: nil)
     }
 
     private func recordProgress(_ value: Double, _ message: String) {

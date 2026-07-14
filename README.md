@@ -10,9 +10,9 @@ The source project is never modified.
 This is an independent community release built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest public package: [v0.4.13 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.13).
-See the [v0.4.13 release notes](docs/RELEASE_NOTES_0.4.13.md) for the macOS
-workspace redesign, Windows Preview Plan support and palette-slot fix.
+Latest public package: [v0.4.14 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.14).
+See the [v0.4.14 release notes](docs/RELEASE_NOTES_0.4.14.md) for small-detail
+color preservation, H2C regression coverage and privacy-safe support reports.
 
 ## What It Does
 
@@ -49,8 +49,9 @@ workspace redesign, Windows Preview Plan support and palette-slot fix.
 
 Very complex or noisy painted files can still be hard cases: conversion may be
 slow, and the result can only be as clean as the source paint-state data it is
-asked to remap. Current builds write a local debug log and show copyable error
-details when the engine cannot finish or the app cannot decode its result.
+asked to remap. Current builds write detailed diagnostics only to a private
+local log. The copyable support report excludes local paths, model names,
+inventory data and raw engine output.
 
 ## Preview
 
@@ -298,6 +299,8 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
   before release archives are produced.
 - Private model projects, generated outputs, inventories and private
   screenshots are not committed to this repository.
+- Copyable error reports omit local paths, model names, inventory data and raw
+  engine output; full diagnostics remain in a private local log.
 - Before printing, verify filament assignments, purge settings and slicing in
   Bambu Studio; physical appearance still depends on filament and calibration.
 
@@ -316,6 +319,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
+- [0.4.14 Release Notes](docs/RELEASE_NOTES_0.4.14.md)
 - [0.4.13 Release Notes](docs/RELEASE_NOTES_0.4.13.md)
 - [0.4.12 macOS H2C Notes](docs/RELEASE_NOTES_0.4.12_MACOS.md)
 - [0.4.9 Release Notes](docs/RELEASE_NOTES_0.4.9.md)

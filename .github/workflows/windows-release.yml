@@ -50,6 +50,11 @@ jobs:
           fi
           mkdir -p release
           ditto -c -k --norsrc --keepParent "dist/FullSpectrum Studio.app" "release/FullSpectrum-Studio-macOS-v${VERSION}.zip"
+      - name: Verify packaged macOS application
+        run: |
+          mkdir -p release-check
+          ditto -x -k release/FullSpectrum-Studio-macOS-*.zip release-check
+          codesign --verify --deep --strict --verbose=2 "release-check/FullSpectrum Studio.app"
       - uses: actions/upload-artifact@v4
         with:
           name: FullSpectrum-Studio-macOS
@@ -66,7 +71,9 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-windows.txt
       - name: Install packaging dependencies
-        run: pip install -r requirements-windows.txt
+        run: pip install -r requirements-windows.txt pip-audit==2.10.1
+      - name: Audit packaging dependencies
+        run: python -m pip_audit -r requirements-windows.txt
       - name: Run engine regression tests
         run: python -m unittest discover -s tests -v
       - name: Validate Windows desktop shell

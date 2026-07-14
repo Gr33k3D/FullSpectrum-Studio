@@ -28,12 +28,11 @@ struct PaletteResultsCard: View {
 
                 Divider().overlay(.white.opacity(0.1))
 
-                HStack(spacing: 18) {
+                LazyVGrid(columns: metricColumns, alignment: .leading, spacing: 10) {
                     MetricChip(title: "QUALITY", value: String(format: "%.0f / 100", result.quality.qualityScore))
                     MetricChip(title: "MEAN ERROR", value: String(format: "dE %.1f", result.quality.estimatedDeltaE))
+                    MetricChip(title: "MAX ERROR", value: String(format: "dE %.1f", result.quality.maximumDeltaE))
                     MetricChip(title: "CONFIDENCE", value: String(format: "%.0f / 100", result.quality.confidenceScore))
-                }
-                HStack(spacing: 18) {
                     if let referenceScore = result.quality.referenceSimilarityScore {
                         MetricChip(title: "REFERENCE", value: String(format: "%.0f / 100", referenceScore))
                     }
@@ -139,12 +138,11 @@ private struct PlanPreviewDetails: View {
 
         Divider().overlay(.white.opacity(0.1))
 
-        HStack(spacing: 18) {
+        LazyVGrid(columns: metricColumns, alignment: .leading, spacing: 10) {
             MetricChip(title: "QUALITY", value: String(format: "%.0f / 100", preview.quality.qualityScore))
             MetricChip(title: "MEAN ERROR", value: String(format: "dE %.1f", preview.quality.estimatedDeltaE))
+            MetricChip(title: "MAX ERROR", value: String(format: "dE %.1f", preview.quality.maximumDeltaE))
             MetricChip(title: "CONFIDENCE", value: String(format: "%.0f / 100", preview.quality.confidenceScore))
-        }
-        HStack(spacing: 18) {
             if let contrast = preview.quality.contrastRetention {
                 MetricChip(title: "CONTRAST", value: String(format: "%.0f%%", contrast))
             }
@@ -196,6 +194,12 @@ private struct PlanPreviewDetails: View {
         }
     }
 }
+
+private let metricColumns = [
+    GridItem(.flexible(minimum: 72), spacing: 12, alignment: .leading),
+    GridItem(.flexible(minimum: 72), spacing: 12, alignment: .leading),
+    GridItem(.flexible(minimum: 72), spacing: 12, alignment: .leading)
+]
 
 private struct ColorDebugRow: View {
     let entry: ColorValidationItem

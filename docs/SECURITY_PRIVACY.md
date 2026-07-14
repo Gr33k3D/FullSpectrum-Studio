@@ -28,5 +28,8 @@ local paths are not written to generated shareable text reports.
 
 Generated `.3mf` files and screenshots may contain model artwork or displayed
 inventory information. Review anything manually before posting it publicly.
+The macOS and Windows Copy Error Report actions exclude local paths, model
+names, inventory data and raw engine output. Detailed diagnostics are written
+only to a private local log and are not copied into the shareable report.
 The repository intentionally does not include user model assets, inventory
 exports, generated reports or private UI screenshots.

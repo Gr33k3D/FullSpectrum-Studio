@@ -18,7 +18,13 @@ MODULE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1])
 if str(MODULE_ROOT) not in sys.path:
     sys.path.insert(0, str(MODULE_ROOT))
 
-from desktop.app_support import APP_ROOT, APP_VERSION, format_plan_preview
+from desktop.app_support import (
+    APP_ROOT,
+    APP_VERSION,
+    format_plan_preview,
+    format_shareable_error_report,
+    privacy_safe_error_message,
+)
 
 
 def load_engine():
@@ -270,7 +276,7 @@ class StudioApp(tk.Tk):
                 f"Quality/waste: {result.get('qualityBiasMode', 'manual')} {result.get('qualityBias', options['quality_bias'])}",
                 f"Planner: {result.get('plannerMode', options['planner_mode'])}",
                 f"Catalog planning region: {result.get('catalogRegionLabel', options['catalog_region'])}",
-                f"Quality: {result['quality']['qualityScore']:.1f} / 100   Mean dE: {result['quality']['estimatedDeltaE']:.2f}",
+                f"Quality: {result['quality']['qualityScore']:.1f} / 100   Mean dE: {result['quality']['estimatedDeltaE']:.2f}   Max dE: {result['quality']['maximumDeltaE']:.2f}",
                 f"Confidence: {result['quality']['confidenceScore']:.1f} / 100   Contrast: {result['quality'].get('contrastRetention', 0):.1f}%",
                 f"Bambu color synchronization: dE {result['colorValidation']['maximumDeltaE']:.2f} max (verified)",
                 f"Printability: {result['printability']['difficulty']}   Mixed paint: {result['printability']['paintedMixedShare']:.1f}%",
@@ -318,7 +324,7 @@ class StudioApp(tk.Tk):
         self.output.delete("1.0", "end")
         report = self.build_error_report(message, details)
         self.output.insert("1.0", report)
-        messagebox.showerror("FullSpectrum Studio", message)
+        messagebox.showerror("FullSpectrum Studio", privacy_safe_error_message(message))
 
     def cancel_conversion(self):
         self.cancel_requested = True
@@ -345,18 +351,19 @@ class StudioApp(tk.Tk):
         self.after(5000, self.check_heartbeat)
 
     def build_error_report(self, message, details=None):
-        body = "\n".join([
+        private_body = "\n".join([
             "FullSpectrum Studio conversion error",
             "",
             message,
             "",
             details or message,
         ])
-        self.last_error_log = self.write_debug_log(body)
-        if self.last_error_log:
-            body = "\n".join([body, "", f"Debug log: {self.last_error_log}"])
-        self.last_error_report = body
-        return body
+        self.last_error_log = self.write_debug_log(private_body)
+        self.last_error_report = format_shareable_error_report(
+            message,
+            log_created=self.last_error_log is not None,
+        )
+        return self.last_error_report
 
     def write_debug_log(self, report):
         try:
@@ -386,7 +393,7 @@ class StudioApp(tk.Tk):
             return
         self.clipboard_clear()
         self.clipboard_append(self.last_error_report)
-        self.status.set("Error report copied.")
+        self.status.set("Privacy-safe error report copied.")
 
     def open_folder(self):
         if not hasattr(self, "last_output"):
