@@ -10,9 +10,9 @@ The source project is never modified.
 This is an independent community release built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest public package: [v0.4.16 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.16).
-See the [v0.4.16 release notes](docs/RELEASE_NOTES_0.4.16.md) for the newer H2C
-project compatibility fix.
+Latest public package: [v0.5.0 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.5.0).
+See the [v0.5.0 release notes](docs/RELEASE_NOTES_0.5.0.md) for automatic live
+forecasting, inventory guidance and the redesigned macOS and Windows apps.
 
 ## What It Does
 
@@ -30,6 +30,13 @@ project compatibility fix.
 - Smart quality mode automatically compares practical, balanced, detail and
   high-detail plans, then keeps the best validated result for the model's
   painted usage.
+- Automatically refreshes a live plan forecast when filament source, slot,
+  quality or palette choices change. The forecast shows a predicted palette,
+  estimated accuracy, confidence, worst visible match and slot plan before a
+  converted `.3mf` is written.
+- Explains when My Inventory is missing a substantially better catalog color,
+  and offers to use and pin that suggestion instead of silently presenting a
+  surprising nearest available match.
 - Supports local Bambu Studio Beta inventory in read-only mode, Bambu PLA
   planning palettes, CMYKW workflows and custom local filament libraries.
 - Accepts an optional `.obj`, `.glb` or texture image as a visual reference and
@@ -250,14 +257,21 @@ uses an H2C-oriented 330 x 320 Textured PEI plate reference because this build
 is tuned around the H2C workflow. Community preview ZIPs have a verified ad-hoc
 bundle signature; they are not Developer ID notarized.
 
+Live Forecast is enabled by default. Planning changes are debounced, then the
+viewer displays the predicted reduced model and an estimated accuracy summary
+without writing an output project. The estimate is based on source colors and
+Bambu-reconstructed swatches; it is not a calibrated guarantee of printed
+color under a particular filament, profile or lighting setup.
+
 ## Windows App
 
-Windows uses the same Python conversion and validation engine in a compact
-desktop shell. Tagged releases build a portable ZIP and installer through
+Windows uses the same Python conversion and validation engine in a split
+planning workspace. Tagged releases build a portable ZIP and installer through
 [.github/workflows/windows-release.yml](.github/workflows/windows-release.yml).
-The Windows shell can run a dry Preview Plan before conversion and shows the
-selected anchors, quality, printability and warnings without writing a 3MF.
-The macOS orbitable analysis viewer is not present in the Windows UI.
+The Windows app automatically refreshes a dry forecast with a source thumbnail,
+estimated accuracy, confidence, worst match, expected swatches, selected slots
+and inventory guidance without writing a 3MF. The macOS orbitable analysis
+viewer is not present in the Windows UI.
 
 ## OrcaSlicer Handoff
 
@@ -321,6 +335,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
+- [0.5.0 Release Notes](docs/RELEASE_NOTES_0.5.0.md)
 - [0.4.16 Release Notes](docs/RELEASE_NOTES_0.4.16.md)
 - [0.4.15 Release Notes](docs/RELEASE_NOTES_0.4.15.md)
 - [0.4.14 Release Notes](docs/RELEASE_NOTES_0.4.14.md)

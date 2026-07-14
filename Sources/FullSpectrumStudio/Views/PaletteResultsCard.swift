@@ -29,7 +29,7 @@ struct PaletteResultsCard: View {
                 Divider().overlay(.white.opacity(0.1))
 
                 LazyVGrid(columns: metricColumns, alignment: .leading, spacing: 10) {
-                    MetricChip(title: "QUALITY", value: String(format: "%.0f / 100", result.quality.qualityScore))
+                    MetricChip(title: "EST. ACCURACY", value: String(format: "%.0f%%", result.quality.qualityScore))
                     MetricChip(title: "MEAN ERROR", value: String(format: "dE %.1f", result.quality.estimatedDeltaE))
                     MetricChip(title: "MAX ERROR", value: String(format: "dE %.1f", result.quality.maximumDeltaE))
                     MetricChip(title: "CONFIDENCE", value: String(format: "%.0f / 100", result.quality.confidenceScore))
@@ -139,7 +139,7 @@ private struct PlanPreviewDetails: View {
         Divider().overlay(.white.opacity(0.1))
 
         LazyVGrid(columns: metricColumns, alignment: .leading, spacing: 10) {
-            MetricChip(title: "QUALITY", value: String(format: "%.0f / 100", preview.quality.qualityScore))
+            MetricChip(title: "EST. ACCURACY", value: String(format: "%.0f%%", preview.quality.qualityScore))
             MetricChip(title: "MEAN ERROR", value: String(format: "dE %.1f", preview.quality.estimatedDeltaE))
             MetricChip(title: "MAX ERROR", value: String(format: "dE %.1f", preview.quality.maximumDeltaE))
             MetricChip(title: "CONFIDENCE", value: String(format: "%.0f / 100", preview.quality.confidenceScore))
@@ -157,6 +157,24 @@ private struct PlanPreviewDetails: View {
             .font(.caption2)
             .foregroundStyle(.white.opacity(0.48))
             .fixedSize(horizontal: false, vertical: true)
+
+        if let match = preview.worstMatch, match.deltaE > 3 {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color(hex: match.targetColor))
+                    .frame(width: 22, height: 22)
+                Image(systemName: "arrow.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.4))
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color(hex: match.predictedColor))
+                    .frame(width: 22, height: 22)
+                Text(String(format: "Worst visible match: slot %d, dE %.1f", match.sourceSlot, match.deltaE))
+                    .font(.caption.monospacedDigit())
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.orange.opacity(0.88))
+        }
 
         Label("\(preview.printability.difficulty) printability complexity; actual time and material require slicing", systemImage: "printer")
             .font(.caption)

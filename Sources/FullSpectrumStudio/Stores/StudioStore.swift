@@ -16,7 +16,7 @@ final class StudioStore: ObservableObject {
     @Published var paletteSource: PaletteSource = .inventory
     @Published var realSlots: RealSlotSelection = .auto
     @Published var plannerMode: PlannerMode = .best
-    @Published var planningSample: PlanningSample = .paint
+    @Published var planningSample: PlanningSample = .preview
     @Published var selectedMaterialFamilies: Set<String> = []
     @Published var pinnedAnchorKeys: Set<String> = []
     @Published var anchorSearch = ""
@@ -28,6 +28,7 @@ final class StudioStore: ObservableObject {
     @Published var inspection: ProjectInspection?
     @Published var result: ConversionResult?
     @Published var planPreview: PlanPreviewResult?
+    @Published private(set) var planPreviewWasAutomatic = false
     @Published var inventory: InventorySnapshot?
     @Published var previewImage: NSImage?
     @Published var previewMeshURL: URL?
@@ -50,6 +51,7 @@ final class StudioStore: ObservableObject {
     @Published var timingMessage = "No active estimate."
     @Published var errorReport: StudioErrorReport?
     @AppStorage("smartQuality") var smartQuality = true
+    @AppStorage("automaticPlanPreview") var automaticPlanPreview = true
     @AppStorage("catalogRegion") private var catalogRegionRawValue = CatalogRegion.global.rawValue
     @AppStorage("autoOpenValidatedOutput") var autoOpenValidatedOutput = true
     @AppStorage("outputApplication") private var outputApplicationRawValue = OutputApplication.bambuStudio.rawValue
@@ -63,6 +65,7 @@ final class StudioStore: ObservableObject {
     private var conversionID = UUID()
     private var conversionTask: Task<Void, Never>?
     private var planningTask: Task<Void, Never>?
+    private var automaticPreviewTask: Task<Void, Never>?
     private var outputPreviewTask: Task<Void, Never>?
     private var activityMonitorTask: Task<Void, Never>?
     private var lastProgressDate = Date()
@@ -83,6 +86,38 @@ final class StudioStore: ObservableObject {
     var outputApplication: OutputApplication {
         get { OutputApplication(rawValue: outputApplicationRawValue) ?? .bambuStudio }
         set { outputApplicationRawValue = newValue.rawValue }
+    }
+
+    var forecastQuality: QualityMetrics? {
+        result?.quality ?? planPreview?.quality
+    }
+
+    var forecastPrintability: PrintabilityMetrics? {
+        result?.printability ?? planPreview?.printability
+    }
+
+    var forecastOutputColors: [String] {
+        if let colors = result?.outputColors ?? planPreview?.outputColors, !colors.isEmpty {
+            return colors
+        }
+        let recipes = result?.recipes ?? planPreview?.recipes ?? []
+        return Dictionary(grouping: recipes, by: \.newSlot)
+            .sorted { $0.key < $1.key }
+            .compactMap { $0.value.first?.preview }
+    }
+
+    var forecastWorstMatch: WorstColorMatch? {
+        result?.worstMatch ?? planPreview?.worstMatch
+    }
+
+    var forecastSlotSummary: String? {
+        if let result {
+            return "\(result.realSlots) physical + \(result.outputSlots - result.realSlots) mixed"
+        }
+        if let preview = planPreview {
+            return "\(preview.realSlots) physical + \(preview.outputSlots - preview.realSlots) mixed"
+        }
+        return nil
     }
 
     var catalogRegion: CatalogRegion {
@@ -196,6 +231,10 @@ final class StudioStore: ObservableObject {
             do {
                 inventory = try await service.inventory()
                 pruneUnavailableSelections()
+                if selectedFile != nil {
+                    invalidateGeneratedPlan()
+                    scheduleAutomaticPlanPreview()
+                }
             } catch {
                 present(error)
             }
@@ -296,9 +335,11 @@ final class StudioStore: ObservableObject {
         inspectionTask?.cancel()
         previewTask?.cancel()
         outputPreviewTask?.cancel()
+        automaticPreviewTask?.cancel()
         conversionID = UUID()
         conversionTask?.cancel()
         planningTask?.cancel()
+        removeGeneratedAnalysisAssets()
         retainSelectedSourceAccess(to: url)
         selectedFile = url
         lastProjectPath = url.path
@@ -451,6 +492,7 @@ final class StudioStore: ObservableObject {
                 finishOperationTiming("Preview ready")
                 previewTask = nil
                 stopActivityMonitorIfIdle()
+                scheduleAutomaticPlanPreview()
             }
         }
     }
@@ -464,6 +506,7 @@ final class StudioStore: ObservableObject {
         referenceURL = url
         invalidateGeneratedPlan()
         status = "Reference selected: \(url.lastPathComponent). Load or convert a 3MF to score it."
+        scheduleAutomaticPlanPreview()
     }
 
     func toggleMaterialFamily(_ series: String) {
@@ -474,12 +517,14 @@ final class StudioStore: ObservableObject {
         }
         invalidateGeneratedPlan()
         pruneUnavailableSelections()
+        scheduleAutomaticPlanPreview()
     }
 
     func clearMaterialFamilies() {
         selectedMaterialFamilies.removeAll()
         invalidateGeneratedPlan()
         pruneUnavailableSelections()
+        scheduleAutomaticPlanPreview()
     }
 
     func toggleAnchorPin(_ candidate: AnchorCandidate) {
@@ -494,11 +539,13 @@ final class StudioStore: ObservableObject {
             pinnedAnchorKeys.insert(candidate.key)
         }
         invalidateGeneratedPlan()
+        scheduleAutomaticPlanPreview()
     }
 
     func clearAnchorPins() {
         pinnedAnchorKeys.removeAll()
         invalidateGeneratedPlan()
+        scheduleAutomaticPlanPreview()
     }
 
     func useRecommendedAnchors() {
@@ -507,6 +554,21 @@ final class StudioStore: ObservableObject {
         guard !keys.isEmpty else { return }
         pinnedAnchorKeys = Set(keys)
         invalidateGeneratedPlan(statusMessage: "Pinned \(keys.count) recommended Bambu anchors. Preview or compose again to lock them in.")
+        scheduleAutomaticPlanPreview()
+    }
+
+    func applyForecastSuggestion(_ suggestion: SuggestedFilament) {
+        if suggestion.availability == "not in My Inventory" {
+            paletteSource = .allBambu
+        }
+        if let key = suggestion.key,
+           availableAnchorCandidates.contains(where: { $0.key == key }) {
+            let maximum = Int(realSlots.rawValue) ?? 6
+            if pinnedAnchorKeys.count < maximum || pinnedAnchorKeys.contains(key) {
+                pinnedAnchorKeys.insert(key)
+            }
+        }
+        plannerInputsChanged()
     }
 
     func plannerInputsChanged() {
@@ -514,8 +576,10 @@ final class StudioStore: ObservableObject {
         if pinnedAnchorKeys.count > maximum {
             pinnedAnchorKeys = Set(pinnedAnchorKeys.sorted().prefix(maximum))
         }
+        cancelStalePlanPreview()
         invalidateGeneratedPlan()
         pruneUnavailableSelections()
+        scheduleAutomaticPlanPreview()
     }
 
     private func invalidateGeneratedPlan(statusMessage: String? = nil) {
@@ -524,6 +588,7 @@ final class StudioStore: ObservableObject {
         planPreview = nil
         outputPreviewTask?.cancel()
         outputPreviewTask = nil
+        removeGeneratedAnalysisAssets()
         outputPreviewMeshURL = nil
         heatmapMeshURL = nil
         anchorInfluenceMeshURL = nil
@@ -537,6 +602,64 @@ final class StudioStore: ObservableObject {
         }
     }
 
+    private func removeGeneratedAnalysisAssets(at urls: [URL?]? = nil) {
+        let temporaryRoot = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        let temporaryPrefix = temporaryRoot.hasSuffix("/") ? temporaryRoot : temporaryRoot + "/"
+        let candidates = urls ?? [outputPreviewMeshURL, heatmapMeshURL, anchorInfluenceMeshURL]
+        let directories = Set(
+            candidates
+                .compactMap { $0?.deletingLastPathComponent().standardizedFileURL }
+                .filter {
+                    $0.path.hasPrefix(temporaryPrefix)
+                    && ($0.lastPathComponent.hasPrefix("FullSpectrum-LiveForecast-")
+                        || $0.lastPathComponent.hasPrefix("FullSpectrum-Analysis-"))
+                }
+        )
+        directories.forEach { try? FileManager.default.removeItem(at: $0) }
+    }
+
+    func automaticPreviewSettingChanged() {
+        if automaticPlanPreview {
+            scheduleAutomaticPlanPreview(delayNanoseconds: 150_000_000)
+        } else {
+            automaticPreviewTask?.cancel()
+            automaticPreviewTask = nil
+            if isPlanningPreview, planPreviewWasAutomatic {
+                cancelStalePlanPreview()
+                status = "Automatic forecast paused."
+            }
+        }
+    }
+
+    private func cancelStalePlanPreview() {
+        guard isPlanningPreview else { return }
+        conversionID = UUID()
+        planningTask?.cancel()
+        planningTask = nil
+        isPlanningPreview = false
+        progress = 0
+    }
+
+    private func scheduleAutomaticPlanPreview(delayNanoseconds: UInt64 = 700_000_000) {
+        automaticPreviewTask?.cancel()
+        automaticPreviewTask = nil
+        guard automaticPlanPreview,
+              selectedFile != nil,
+              !isWorking,
+              paletteSource != .custom || customPaletteURL != nil else { return }
+        let expectedPath = selectedFile?.standardizedFileURL.path
+        automaticPreviewTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled, let self,
+                  self.selectedFile?.standardizedFileURL.path == expectedPath else { return }
+            if self.isBuildingPreview {
+                self.scheduleAutomaticPlanPreview(delayNanoseconds: 500_000_000)
+                return
+            }
+            self.startPlanPreview(automatic: true)
+        }
+    }
+
     func acceptCustomPalette(url: URL) {
         guard url.pathExtension.lowercased() == "json" else {
             present(message: "Custom filament libraries must be JSON files.")
@@ -545,6 +668,7 @@ final class StudioStore: ObservableObject {
         customPaletteURL = url
         paletteSource = .custom
         invalidateGeneratedPlan()
+        scheduleAutomaticPlanPreview()
     }
 
     func acceptTextureOverride(url: URL) {
@@ -560,16 +684,27 @@ final class StudioStore: ObservableObject {
     }
 
     func previewPlan() {
+        startPlanPreview(automatic: false)
+    }
+
+    private func startPlanPreview(automatic: Bool) {
         guard let file = selectedFile else {
-            chooseSourceFile()
+            if !automatic { chooseSourceFile() }
             return
         }
         if paletteSource == .custom && customPaletteURL == nil {
-            chooseCustomPaletteFile(startPlanPreviewAfterSelection: true)
+            if !automatic { chooseCustomPaletteFile(startPlanPreviewAfterSelection: true) }
             return
         }
+        if automatic && (isWorking || isBuildingPreview) {
+            scheduleAutomaticPlanPreview(delayNanoseconds: 500_000_000)
+            return
+        }
+        automaticPreviewTask?.cancel()
+        automaticPreviewTask = nil
         isPlanningPreview = true
         isWorking = false
+        planPreviewWasAutomatic = automatic
         errorMessage = nil
         errorReport = nil
         invalidateGeneratedPlan()
@@ -582,13 +717,12 @@ final class StudioStore: ObservableObject {
             historyKey: estimateHistoryKey(kind: "plan"),
             broadHistoryKey: broadEstimateHistoryKey(kind: "plan")
         )
-        status = planningSample == .preview
-            ? "Previewing palette with optimized preview-mesh color weights..."
-            : "Previewing palette with original paint-state weights..."
-        inspectionTask?.cancel()
-        previewTask?.cancel()
+        status = automatic
+            ? "Updating live palette forecast..."
+            : (planningSample == .preview
+               ? "Previewing palette with optimized preview-mesh color weights..."
+               : "Previewing palette with original paint-state weights...")
         outputPreviewTask?.cancel()
-        isBuildingPreview = false
         planningTask?.cancel()
         conversionTask?.cancel()
         let currentConversionID = UUID()
@@ -635,12 +769,27 @@ final class StudioStore: ObservableObject {
                         }
                     }
                 )
-                guard conversionID == currentConversionID else { return }
+                guard conversionID == currentConversionID else {
+                    removeGeneratedAnalysisAssets(at: [
+                        preview.analysisAssets?.predictedMesh.map(URL.init(fileURLWithPath:)),
+                        preview.analysisAssets?.heatmapMesh.map(URL.init(fileURLWithPath:)),
+                        preview.analysisAssets?.anchorInfluenceMesh.map(URL.init(fileURLWithPath:)),
+                    ])
+                    return
+                }
                 planPreview = preview
+                outputPreviewMeshURL = preview.analysisAssets?.predictedMesh.map(URL.init(fileURLWithPath:))
+                heatmapMeshURL = preview.analysisAssets?.heatmapMesh.map(URL.init(fileURLWithPath:))
+                anchorInfluenceMeshURL = preview.analysisAssets?.anchorInfluenceMesh.map(URL.init(fileURLWithPath:))
+                if outputPreviewMeshURL != nil {
+                    previewMode = .predicted
+                }
                 progress = 1
-                progressMessage = "Plan preview ready."
-                finishOperationTiming("Plan preview ready")
-                status = "Preview plan: \(preview.realSlots) physical and \(preview.outputSlots - preview.realSlots) mixed slots. No 3MF was written."
+                progressMessage = automatic ? "Live forecast ready." : "Plan preview ready."
+                finishOperationTiming(automatic ? "Forecast ready" : "Plan preview ready")
+                status = automatic
+                    ? "Live forecast: \(Int(preview.quality.qualityScore.rounded()))% estimated accuracy."
+                    : "Preview plan: \(preview.realSlots) physical and \(preview.outputSlots - preview.realSlots) mixed slots. No 3MF was written."
             } catch is CancellationError {
                 guard conversionID == currentConversionID else { return }
                 status = "Plan preview cancelled."
@@ -648,9 +797,15 @@ final class StudioStore: ObservableObject {
                 finishOperationTiming("Cancelled")
             } catch {
                 guard conversionID == currentConversionID else { return }
-                present(error)
-                status = "Plan preview failed."
-                progressMessage = "Plan preview failed."
+                if automatic {
+                    errorMessage = nil
+                    status = "Live forecast unavailable for the current choices. Manual Preview Plan shows details."
+                    progressMessage = "Live forecast unavailable."
+                } else {
+                    present(error)
+                    status = "Plan preview failed."
+                    progressMessage = "Plan preview failed."
+                }
                 finishOperationTiming("Failed")
             }
             if conversionID == currentConversionID {
@@ -670,6 +825,8 @@ final class StudioStore: ObservableObject {
             chooseCustomPaletteFile(startConversionAfterSelection: true)
             return
         }
+        automaticPreviewTask?.cancel()
+        automaticPreviewTask = nil
         isWorking = true
         isPlanningPreview = false
         errorMessage = nil
@@ -782,6 +939,8 @@ final class StudioStore: ObservableObject {
     }
 
     func cancelConversion() {
+        automaticPreviewTask?.cancel()
+        automaticPreviewTask = nil
         inspectionTask?.cancel()
         previewTask?.cancel()
         outputPreviewTask?.cancel()
@@ -830,6 +989,8 @@ final class StudioStore: ObservableObject {
     }
 
     func cancelPlanPreview() {
+        automaticPreviewTask?.cancel()
+        automaticPreviewTask = nil
         planningTask?.cancel()
         conversionID = UUID()
         planningTask = nil

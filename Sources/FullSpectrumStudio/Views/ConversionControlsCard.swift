@@ -11,6 +11,10 @@ struct ConversionControlsCard: View {
                 .tracking(1.2)
                 .foregroundStyle(Color.studioTertiaryText)
 
+            LiveForecastPanel()
+
+            Divider().overlay(.white.opacity(0.08))
+
             Picker("Palette strategy", selection: $store.mode) {
                 ForEach(PaletteMode.allCases) { mode in
                     Text(mode.title).tag(mode)
@@ -477,6 +481,217 @@ struct ConversionControlsCard: View {
         .onChange(of: store.realSlots) { _, _ in store.plannerInputsChanged() }
         .onChange(of: store.smartQuality) { _, _ in store.plannerInputsChanged() }
         .onChange(of: store.qualityBias) { _, _ in store.plannerInputsChanged() }
+        .onChange(of: store.catalogRegion) { _, _ in store.plannerInputsChanged() }
+        .onChange(of: store.automaticPlanPreview) { _, _ in store.automaticPreviewSettingChanged() }
+    }
+}
+
+private struct LiveForecastPanel: View {
+    @EnvironmentObject private var store: StudioStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Label("LIVE FORECAST", systemImage: "sparkles")
+                    .font(.caption.weight(.bold))
+                    .tracking(0.9)
+                    .foregroundStyle(Color.studioAccent)
+                Spacer()
+                Toggle("Auto", isOn: $store.automaticPlanPreview)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.studioSecondaryText)
+            }
+
+            if let quality = store.forecastQuality {
+                HStack(alignment: .center, spacing: 14) {
+                    ForecastAccuracyGauge(score: quality.qualityScore)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForecastMetricRow(
+                            title: "Confidence",
+                            value: "\(Int(quality.confidenceScore.rounded()))%"
+                        )
+                        ForecastMetricRow(
+                            title: "Worst match",
+                            value: String(format: "dE %.1f", quality.maximumDeltaE)
+                        )
+                        if let slots = store.forecastSlotSummary {
+                            ForecastMetricRow(title: "Plan", value: slots)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if !store.forecastOutputColors.isEmpty {
+                    ForecastPaletteStrip(colors: store.forecastOutputColors)
+                }
+
+                if let match = store.forecastWorstMatch, match.deltaE > 3 {
+                    WorstMatchNotice(match: match)
+                }
+
+                Text("Estimated before slicing and physical calibration")
+                    .font(.caption2)
+                    .foregroundStyle(Color.studioTertiaryText)
+            } else {
+                HStack(spacing: 10) {
+                    if store.isPlanningPreview {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: store.selectedFile == nil ? "cube.transparent" : "waveform.path.ecg")
+                            .foregroundStyle(Color.studioTertiaryText)
+                    }
+                    Text(store.selectedFile == nil ? "No model loaded" : "Forecast pending")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(Color.studioSecondaryText)
+                    Spacer()
+                }
+                .frame(minHeight: 52)
+            }
+
+            if store.isPlanningPreview {
+                ProgressView(value: store.progress)
+                    .progressViewStyle(.linear)
+                    .tint(Color.studioAccent)
+            }
+        }
+    }
+}
+
+private struct ForecastAccuracyGauge: View {
+    let score: Double
+
+    private var tint: Color {
+        if score >= 88 { return .studioSuccess }
+        if score >= 70 { return .studioAccent }
+        return .studioWarning
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.08), lineWidth: 7)
+            Circle()
+                .trim(from: 0, to: max(0, min(1, score / 100)))
+                .stroke(tint, style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            VStack(spacing: 0) {
+                Text("\(Int(score.rounded()))%")
+                    .font(.title3.monospacedDigit().weight(.bold))
+                    .foregroundStyle(Color.studioPrimaryText)
+                Text("accuracy")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.studioTertiaryText)
+            }
+        }
+        .frame(width: 82, height: 82)
+        .accessibilityLabel("Estimated accuracy \(Int(score.rounded())) percent")
+    }
+}
+
+private struct ForecastMetricRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .foregroundStyle(Color.studioTertiaryText)
+            Spacer(minLength: 4)
+            Text(value)
+                .monospacedDigit()
+                .foregroundStyle(Color.studioPrimaryText)
+                .multilineTextAlignment(.trailing)
+        }
+        .font(.caption.weight(.medium))
+    }
+}
+
+private struct ForecastPaletteStrip: View {
+    let colors: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("EXPECTED PALETTE")
+                .font(.caption2.weight(.bold))
+                .tracking(0.8)
+                .foregroundStyle(Color.studioTertiaryText)
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 22, maximum: 34), spacing: 5)],
+                alignment: .leading,
+                spacing: 5
+            ) {
+                ForEach(Array(colors.enumerated()), id: \.offset) { _, color in
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color(hex: color))
+                        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+                        }
+                }
+            }
+        }
+    }
+}
+
+private struct WorstMatchNotice: View {
+    @EnvironmentObject private var store: StudioStore
+    let match: WorstColorMatch
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color(hex: match.targetColor))
+                    .frame(width: 24, height: 24)
+                Image(systemName: "arrow.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(Color.studioTertiaryText)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color(hex: match.predictedColor))
+                    .frame(width: 24, height: 24)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Worst visible match")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.studioWarning)
+                    Text(String(format: "Slot %d · %.1f%% paint · dE %.1f", match.sourceSlot, match.paintedShare, match.deltaE))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(Color.studioTertiaryText)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if let suggestion = match.suggestedFilament {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color(hex: suggestion.color))
+                        .frame(width: 16, height: 16)
+                        .overlay { Circle().stroke(Color.white.opacity(0.16), lineWidth: 1) }
+                    Text(suggestion.availability == "not in My Inventory"
+                         ? "Missing from My Inventory: \(suggestion.name)"
+                         : "Available in My Inventory: \(suggestion.name)")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(Color.studioSecondaryText)
+                        .lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button {
+                        store.applyForecastSuggestion(suggestion)
+                    } label: {
+                        Label("Use", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.studioAccent)
+                    .help("Add this filament to the next plan")
+                }
+            }
+        }
+        .padding(.vertical, 9)
+        .overlay(alignment: .top) { Divider().overlay(Color.studioWarning.opacity(0.25)) }
+        .overlay(alignment: .bottom) { Divider().overlay(Color.studioWarning.opacity(0.25)) }
     }
 }
 

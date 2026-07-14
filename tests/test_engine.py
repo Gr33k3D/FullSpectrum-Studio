@@ -422,6 +422,32 @@ class ConversionTests(unittest.TestCase):
             generated = list(Path(folder).glob("*FullSpectrum*.3mf"))
             self.assertEqual(generated, [])
 
+    def test_plan_preview_emits_live_predicted_mesh_without_writing_output(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            analysis = Path(folder) / "live-forecast"
+            write_project(source)
+
+            output = ENGINE.convert(
+                source,
+                "official",
+                "catalog",
+                folder,
+                False,
+                "2",
+                planner_mode="fast",
+                plan_only=True,
+                analysis_dir=analysis,
+            )
+
+            self.assertEqual(output["type"], "planPreview")
+            self.assertEqual(len(output["outputColors"]), output["outputSlots"])
+            self.assertIsNotNone(output["worstMatch"])
+            self.assertTrue(Path(output["analysisAssets"]["predictedMesh"]).exists())
+            self.assertTrue(Path(output["analysisAssets"]["heatmapMesh"]).exists())
+            self.assertTrue(Path(output["analysisAssets"]["anchorInfluenceMesh"]).exists())
+            self.assertEqual(list(Path(folder).glob("*FullSpectrum*.3mf")), [])
+
     def test_metadata_only_inspection_avoids_mesh_scan_and_preview_build(self):
         with tempfile.TemporaryDirectory() as folder:
             source = Path(folder) / "source.3mf"
@@ -561,6 +587,43 @@ class ConversionTests(unittest.TestCase):
 
         self.assertEqual(metrics["maximumDeltaE"], 30.0)
         self.assertLessEqual(metrics["qualityScore"], 64.0)
+
+    def test_inventory_gap_recommends_a_missing_black_filament(self):
+        inventory = {
+            "spools": [
+                {
+                    "name": "Owned Blue",
+                    "series": "PLA Basic",
+                    "brand": "Bambu Lab",
+                    "color": "#0047BB",
+                    "preset": "Bambu PLA Basic",
+                    "filamentID": "GFA00",
+                    "remainingGrams": 500.0,
+                    "initialGrams": 1000.0,
+                },
+                {
+                    "name": "Owned White",
+                    "series": "PLA Basic",
+                    "brand": "Bambu Lab",
+                    "color": "#FFFFFF",
+                    "preset": "Bambu PLA Basic",
+                    "filamentID": "GFA00",
+                    "remainingGrams": 500.0,
+                    "initialGrams": 1000.0,
+                },
+            ]
+        }
+        rows = [
+            [1, 1, "#000000", "ANCHOR", "Owned Blue", "", "", "#0047BB", "35.0", "35.0", "0.0"],
+        ]
+
+        match = ENGINE.worst_color_match(rows, {1: 10}, "inventory", inventory)
+
+        self.assertEqual(match["targetColor"], "#000000")
+        self.assertEqual(match["severity"], "poor")
+        self.assertIsNotNone(match["suggestedFilament"])
+        self.assertIn("black", match["suggestedFilament"]["name"].lower())
+        self.assertEqual(match["suggestedFilament"]["availability"], "not in My Inventory")
 
     def test_unused_source_color_does_not_create_an_unused_mix_slot(self):
         anchors = [

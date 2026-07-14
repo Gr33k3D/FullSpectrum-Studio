@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -13,6 +14,8 @@ import tkinter as tk
 from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+
+from PIL import Image, ImageTk
 
 MODULE_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 if str(MODULE_ROOT) not in sys.path:
@@ -23,6 +26,7 @@ from desktop.app_support import (
     APP_VERSION,
     format_plan_preview,
     format_shareable_error_report,
+    plan_forecast,
     privacy_safe_error_message,
 )
 
@@ -45,22 +49,23 @@ class StudioApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"FullSpectrum Studio {APP_VERSION}")
-        self.geometry("1080x820")
-        self.minsize(860, 620)
-        self.configure(bg="#101721")
+        self.geometry("1220x820")
+        self.minsize(980, 660)
+        self.configure(bg="#151719")
         self.project = tk.StringVar()
         self.reference = tk.StringVar()
         self.texture = tk.StringVar()
         self.custom = tk.StringVar()
         self.strategy = tk.StringVar(value="official")
         self.planner_mode = tk.StringVar(value="best")
-        self.planning_sample = tk.StringVar(value="paint")
+        self.planning_sample = tk.StringVar(value="preview")
         self.source = tk.StringVar(value="inventory")
         self.catalog_region = tk.StringVar(value="global")
         self.real_slots = tk.StringVar(value="auto")
         self.mix_model = tk.StringVar(value="bambu")
         self.quality_bias = tk.IntVar(value=60)
         self.smart_quality = tk.BooleanVar(value=True)
+        self.auto_preview = tk.BooleanVar(value=True)
         self.auto_open = tk.BooleanVar(value=True)
         self.output_application = tk.StringVar(value="Bambu Studio")
         self.progress = tk.DoubleVar(value=0)
@@ -72,105 +77,313 @@ class StudioApp(tk.Tk):
         self.last_error_report = ""
         self.last_error_log = None
         self.operation_name = "Operation"
+        self.settings_revision = 0
+        self.auto_preview_dirty = False
+        self.auto_preview_after = None
+        self.source_preview_photo = None
+        self.last_plan_result = None
         self._build()
 
     def _build(self):
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure(".", background="#101721", foreground="#e9f0f5", fieldbackground="#182331")
-        style.configure("TButton", padding=8, foreground="#f6fbff", background="#233041")
-        style.map("TButton", foreground=[("active", "#ffffff"), ("pressed", "#ffffff"), ("disabled", "#7f91a0")], background=[("active", "#2f4056"), ("pressed", "#1d2a3a")])
-        style.configure("TCombobox", foreground="#f6fbff", fieldbackground="#182331", background="#233041", arrowcolor="#f6fbff")
-        style.map("TCombobox", foreground=[("readonly", "#f6fbff")], fieldbackground=[("readonly", "#182331")], selectforeground=[("readonly", "#f6fbff")], selectbackground=[("readonly", "#182331")])
-        style.configure("Title.TLabel", font=("Segoe UI", 22, "bold"), foreground="#f6fbff")
-        style.configure("Small.TLabel", foreground="#9cb4c5")
-        shell = ttk.Frame(self)
+        style.configure(".", background="#151719", foreground="#eef2f3", fieldbackground="#24282b")
+        style.configure("TButton", padding=8, foreground="#f6f8f8", background="#292e32")
+        style.map("TButton", foreground=[("active", "#ffffff"), ("pressed", "#ffffff"), ("disabled", "#7f898f")], background=[("active", "#343b40"), ("pressed", "#202427")])
+        style.configure("Accent.TButton", padding=9, foreground="#081113", background="#55bdcf", font=("Segoe UI", 10, "bold"))
+        style.map("Accent.TButton", background=[("active", "#73ccda"), ("pressed", "#42aabc"), ("disabled", "#41575c")])
+        style.configure("TCombobox", foreground="#f6f8f8", fieldbackground="#24282b", background="#292e32", arrowcolor="#f6f8f8")
+        style.map("TCombobox", foreground=[("readonly", "#f6f8f8")], fieldbackground=[("readonly", "#24282b")], selectforeground=[("readonly", "#f6f8f8")], selectbackground=[("readonly", "#24282b")])
+        style.configure("Title.TLabel", font=("Segoe UI", 20, "bold"), foreground="#f7f9f9")
+        style.configure("Section.TLabel", font=("Segoe UI", 9, "bold"), foreground="#75c6d4")
+        style.configure("Metric.TLabel", font=("Segoe UI", 11, "bold"), foreground="#f1f5f5")
+        style.configure("Small.TLabel", foreground="#98a5ab")
+        style.configure("Warning.TLabel", foreground="#eba85e")
+        self.configure(bg="#151719")
+
+        shell = ttk.Frame(self, padding=(18, 14, 18, 18))
         shell.pack(fill="both", expand=True)
-        canvas = tk.Canvas(shell, bg="#101721", highlightthickness=0, borderwidth=0)
-        scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        title_row = ttk.Frame(shell)
+        title_row.pack(fill="x", pady=(0, 12))
+        ttk.Label(title_row, text="FullSpectrum Studio", style="Title.TLabel").pack(side="left")
+        ttk.Label(title_row, text="Automatic palette forecast", style="Small.TLabel").pack(side="left", padx=(14, 0), pady=(6, 0))
+        ttk.Label(title_row, text=f"v{APP_VERSION}", style="Small.TLabel").pack(side="right", pady=(6, 0))
+
+        workspace = ttk.Panedwindow(shell, orient="horizontal")
+        workspace.pack(fill="both", expand=True)
+        left_shell = ttk.Frame(workspace, width=445)
+        right = ttk.Frame(workspace, padding=(18, 0, 0, 0))
+        workspace.add(left_shell, weight=0)
+        workspace.add(right, weight=1)
+
+        canvas = tk.Canvas(left_shell, bg="#151719", highlightthickness=0, borderwidth=0, width=430)
+        scrollbar = ttk.Scrollbar(left_shell, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        frame = ttk.Frame(canvas, padding=24)
+        frame = ttk.Frame(canvas, padding=(2, 2, 14, 18))
         content_window = canvas.create_window((0, 0), window=frame, anchor="nw")
         frame.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(content_window, width=event.width))
         self.content_canvas = canvas
-        title_row = ttk.Frame(frame)
-        title_row.pack(fill="x")
-        ttk.Label(title_row, text="FullSpectrum Studio", style="Title.TLabel").pack(side="left")
-        ttk.Label(title_row, text=f"v{APP_VERSION}", style="Small.TLabel").pack(side="right")
-        ttk.Label(frame, text="Local reduced-filament workflow for painted Bambu projects", style="Small.TLabel").pack(anchor="w", pady=(0, 22))
-        ttk.Label(
-            frame,
-            text="Reduces/remaps existing Bambu paint states. It does not repaint, smooth or clean up painted regions.",
-            style="Small.TLabel",
-        ).pack(anchor="w", pady=(0, 12))
+
+        ttk.Label(frame, text="SOURCE", style="Section.TLabel").pack(anchor="w", pady=(0, 7))
 
         for title, variable, action in [
-            ("Painted 3MF project or textured OBJ / GLB (experimental)", self.project, self.choose_project),
-            ("OBJ base-color texture override (PNG / JPG)", self.texture, self.choose_texture),
-            ("Optional OBJ / GLB / texture reference", self.reference, self.choose_reference),
-            ("Optional custom filament library (JSON)", self.custom, self.choose_custom),
+            ("Painted 3MF or textured model", self.project, self.choose_project),
+            ("OBJ texture", self.texture, self.choose_texture),
+            ("Visual reference", self.reference, self.choose_reference),
+            ("Custom filament library", self.custom, self.choose_custom),
         ]:
-            ttk.Label(frame, text=title).pack(anchor="w", pady=(8, 3))
+            ttk.Label(frame, text=title, style="Small.TLabel").pack(anchor="w", pady=(7, 3))
             row = ttk.Frame(frame)
             row.pack(fill="x")
             ttk.Entry(row, textvariable=variable).pack(side="left", fill="x", expand=True)
             ttk.Button(row, text="Browse", command=action).pack(side="left", padx=(8, 0))
 
+        ttk.Separator(frame).pack(fill="x", pady=18)
+        ttk.Label(frame, text="PLAN", style="Section.TLabel").pack(anchor="w", pady=(0, 8))
         choices = ttk.Frame(frame)
-        choices.pack(fill="x", pady=22)
+        choices.pack(fill="x")
         self.combo(choices, "Strategy", self.strategy, ["official", "cmykw"], 0, 0)
         self.combo(choices, "Planner", self.planner_mode, ["best", "fast"], 1, 0)
         self.combo(choices, "Filaments", self.source, ["inventory", "catalog", "all-bambu", "custom", "exact-cmykw"], 2, 0)
         self.combo(choices, "Physical slots", self.real_slots, ["auto", "2", "3", "4", "5", "6", "7", "8"], 0, 1)
         self.combo(choices, "Catalog region", self.catalog_region, ["global", "eu", "us-ca", "uk", "au-nz", "asia"], 1, 1)
         self.combo(choices, "Planning sample", self.planning_sample, ["paint", "preview"], 2, 1)
-        ttk.Label(
-            frame,
-            text="Catalog region is planning metadata only; FullSpectrum does not check live Bambu store stock.",
-            style="Small.TLabel",
-        ).pack(anchor="w", pady=(0, 12))
+
         handoff = ttk.Frame(frame)
-        handoff.pack(fill="x", pady=(0, 12))
+        handoff.pack(fill="x", pady=(8, 12))
         ttk.Checkbutton(handoff, text="Open validated output in", variable=self.auto_open).pack(side="left")
         ttk.Combobox(
             handoff, textvariable=self.output_application,
             values=["Bambu Studio", "OrcaSlicer"], state="readonly", width=18
         ).pack(side="left", padx=(8, 0))
-        ttk.Label(handoff, text="Validates first, then hands the file to the slicer.", style="Small.TLabel").pack(side="left", padx=(14, 0))
 
         slider = ttk.Frame(frame)
-        slider.pack(fill="x", pady=(0, 16))
+        slider.pack(fill="x", pady=(0, 14))
         ttk.Checkbutton(slider, text="Smart quality", variable=self.smart_quality).pack(side="left")
         tk.Scale(
             slider, from_=0, to=100, orient="horizontal", variable=self.quality_bias,
-            bg="#101721", fg="#d7e5ed", highlightthickness=0, troughcolor="#182331",
-            length=320
-        ).pack(side="left", padx=12)
-        ttk.Label(slider, text="Best planner searches dense 2/3-color mixes; Fast keeps the quicker planner. 7/8 slots are experimental.", style="Small.TLabel").pack(side="left")
+            bg="#151719", fg="#d9e1e3", highlightthickness=0, troughcolor="#24282b",
+            activebackground="#55bdcf", length=220
+        ).pack(side="left", fill="x", expand=True, padx=(12, 0))
 
-        ttk.Progressbar(frame, variable=self.progress, maximum=100).pack(fill="x", pady=(8, 10))
-        ttk.Label(frame, textvariable=self.status, style="Small.TLabel").pack(anchor="w")
         buttons = ttk.Frame(frame)
-        buttons.pack(fill="x", pady=18)
+        buttons.pack(fill="x", pady=(4, 10))
         self.preview_button = ttk.Button(buttons, text="Preview Plan", command=self.preview_plan)
         self.preview_button.pack(side="left")
-        self.convert_button = ttk.Button(buttons, text="Convert and Validate", command=self.convert)
+        self.convert_button = ttk.Button(buttons, text="Compose Palette", command=self.convert, style="Accent.TButton")
         self.convert_button.pack(side="left", padx=(8, 0))
         self.cancel_button = ttk.Button(buttons, text="Cancel", command=self.cancel_conversion, state="disabled")
         self.cancel_button.pack(side="left", padx=8)
-        self.folder_button = ttk.Button(buttons, text="Show Output", command=self.open_folder, state="disabled")
-        self.folder_button.pack(side="left", padx=8)
-        self.copy_error_button = ttk.Button(buttons, text="Copy Error Report", command=self.copy_error_report, state="disabled")
-        self.copy_error_button.pack(side="left", padx=8)
-        self.output = tk.Text(frame, height=14, bg="#121c28", fg="#d7e5ed", insertbackground="white", relief="flat", padx=12, pady=12)
-        self.output.pack(fill="both", expand=True)
+
+        tools = ttk.Frame(frame)
+        tools.pack(fill="x")
+        self.folder_button = ttk.Button(tools, text="Show Output", command=self.open_folder, state="disabled")
+        self.folder_button.pack(side="left")
+        self.copy_error_button = ttk.Button(tools, text="Copy Error Report", command=self.copy_error_report, state="disabled")
+        self.copy_error_button.pack(side="left", padx=(8, 0))
+
+        forecast_header = ttk.Frame(right)
+        forecast_header.pack(fill="x", pady=(0, 9))
+        ttk.Label(forecast_header, text="LIVE FORECAST", style="Section.TLabel").pack(side="left")
+        ttk.Checkbutton(forecast_header, text="Automatic", variable=self.auto_preview).pack(side="right")
+
+        self.preview_canvas = tk.Canvas(right, height=300, bg="#0f1112", highlightthickness=1, highlightbackground="#30363a")
+        self.preview_canvas.pack(fill="x")
+        self.preview_canvas.create_text(260, 150, text="Open a model to preview", fill="#768187", font=("Segoe UI", 13))
+
+        forecast_row = ttk.Frame(right, padding=(0, 14, 0, 8))
+        forecast_row.pack(fill="x")
+        self.accuracy_canvas = tk.Canvas(forecast_row, width=112, height=112, bg="#151719", highlightthickness=0)
+        self.accuracy_canvas.pack(side="left")
+        self.accuracy_value = tk.StringVar(value="--%")
+        self.confidence_value = tk.StringVar(value="--%")
+        self.error_value = tk.StringVar(value="dE --")
+        self.slots_value = tk.StringVar(value="No plan")
+        metrics = ttk.Frame(forecast_row)
+        metrics.pack(side="left", fill="both", expand=True, padx=(18, 0))
+        for title, variable in [
+            ("Estimated accuracy", self.accuracy_value),
+            ("Confidence", self.confidence_value),
+            ("Worst match", self.error_value),
+            ("Palette", self.slots_value),
+        ]:
+            row = ttk.Frame(metrics)
+            row.pack(fill="x", pady=2)
+            ttk.Label(row, text=title, style="Small.TLabel").pack(side="left")
+            ttk.Label(row, textvariable=variable, style="Metric.TLabel").pack(side="right")
+        self._draw_accuracy(0, empty=True)
+
+        ttk.Label(right, text="EXPECTED PALETTE", style="Section.TLabel").pack(anchor="w", pady=(7, 6))
+        self.palette_canvas = tk.Canvas(right, height=44, bg="#151719", highlightthickness=0)
+        self.palette_canvas.pack(fill="x")
+        self.gap_message = tk.StringVar(value="")
+        gap_row = ttk.Frame(right)
+        gap_row.pack(fill="x", pady=(5, 8))
+        self.gap_label = ttk.Label(gap_row, textvariable=self.gap_message, style="Warning.TLabel", wraplength=520, justify="left")
+        self.gap_label.pack(side="left", fill="x", expand=True)
+        self.suggestion_button = ttk.Button(gap_row, text="Use suggestion", command=self.use_forecast_suggestion, state="disabled")
+        self.suggestion_button.pack(side="right", padx=(10, 0))
+
+        ttk.Progressbar(right, variable=self.progress, maximum=100).pack(fill="x", pady=(2, 7))
+        ttk.Label(right, textvariable=self.status, style="Small.TLabel", wraplength=680, justify="left").pack(anchor="w")
+        self.output = tk.Text(right, height=11, bg="#1c2023", fg="#dce4e6", insertbackground="white", relief="flat", padx=12, pady=12, wrap="word")
+        self.output.pack(fill="both", expand=True, pady=(10, 0))
+
+        watched = [
+            self.project, self.reference, self.texture, self.custom, self.strategy,
+            self.planner_mode, self.planning_sample, self.source, self.catalog_region,
+            self.real_slots, self.quality_bias, self.smart_quality,
+        ]
+        for variable in watched:
+            variable.trace_add("write", self.schedule_auto_preview)
+        self.auto_preview.trace_add("write", self.schedule_auto_preview)
 
     def combo(self, parent, title, variable, values, column, row=0):
+        parent.columnconfigure(column, weight=1)
         ttk.Label(parent, text=title).grid(row=row * 2, column=column, sticky="w", padx=(0, 20), pady=(0, 2))
-        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=18).grid(row=row * 2 + 1, column=column, sticky="w", padx=(0, 20), pady=(0, 8))
+        ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=13).grid(row=row * 2 + 1, column=column, sticky="ew", padx=(0, 12), pady=(0, 8))
+
+    def schedule_auto_preview(self, *_):
+        self.settings_revision += 1
+        if self.auto_preview_after is not None:
+            self.after_cancel(self.auto_preview_after)
+            self.auto_preview_after = None
+        if not self.auto_preview.get():
+            self.auto_preview_dirty = False
+            return
+        source = Path(self.project.get())
+        if not source.is_file() or source.suffix.lower() not in (".3mf", ".obj", ".glb"):
+            return
+        if self.source.get() == "custom" and not Path(self.custom.get()).is_file():
+            return
+        if self.worker_active:
+            self.auto_preview_dirty = True
+            return
+        self.auto_preview_dirty = False
+        revision = self.settings_revision
+        self.status.set("Live forecast queued for the current choices.")
+        self.auto_preview_after = self.after(
+            750,
+            lambda: self.start_operation(plan_only=True, automatic=True, operation_revision=revision),
+        )
+
+    def _draw_accuracy(self, score, empty=False):
+        canvas = self.accuracy_canvas
+        canvas.delete("all")
+        canvas.create_arc(10, 10, 102, 102, start=90, extent=-359.9, style="arc", width=9, outline="#2b3033")
+        if not empty:
+            color = "#58c488" if score >= 88 else ("#55bdcf" if score >= 70 else "#eba85e")
+            canvas.create_arc(10, 10, 102, 102, start=90, extent=-359.9 * max(0, min(100, score)) / 100, style="arc", width=9, outline=color)
+        canvas.create_text(56, 51, text="--%" if empty else f"{round(score):.0f}%", fill="#f1f5f5", font=("Segoe UI", 18, "bold"))
+        canvas.create_text(56, 72, text="accuracy", fill="#88959b", font=("Segoe UI", 8, "bold"))
+
+    def _draw_palette(self, colors):
+        self.palette_canvas.delete("all")
+        if not colors:
+            self.palette_canvas.configure(height=44)
+            self.palette_canvas.create_text(6, 22, anchor="w", text="No forecast palette", fill="#768187", font=("Segoe UI", 10))
+            return
+        width = max(320, self.palette_canvas.winfo_width())
+        gap = 5
+        columns = min(16, len(colors))
+        rows = (len(colors) + columns - 1) // columns
+        swatch_width = max(18, (width - gap * (columns - 1)) / columns)
+        self.palette_canvas.configure(height=8 + rows * 33 + max(0, rows - 1) * gap)
+        for index, color in enumerate(colors):
+            if not isinstance(color, str) or len(color) != 7 or not color.startswith("#"):
+                continue
+            column = index % columns
+            row = index // columns
+            x0 = column * (swatch_width + gap)
+            y0 = 4 + row * (33 + gap)
+            self.palette_canvas.create_rectangle(x0, y0, x0 + swatch_width, y0 + 33, fill=color, outline="#4a5155", width=1)
+
+    def update_forecast(self, result):
+        self.last_plan_result = result
+        forecast = plan_forecast(result)
+        score = forecast["accuracy"]
+        confidence = forecast["confidence"]
+        maximum = forecast["maximumDeltaE"]
+        self.accuracy_value.set(f"{score:.0f}%")
+        self.confidence_value.set(f"{confidence:.0f}%")
+        self.error_value.set(f"dE {maximum:.1f}")
+        self.slots_value.set(forecast["slotSummary"])
+        self._draw_accuracy(score)
+        self._draw_palette(forecast["colors"])
+
+        suggestion = forecast["suggestion"]
+        self.forecast_suggestion = suggestion
+        self.suggestion_button.configure(state="normal" if suggestion else "disabled")
+        self.gap_message.set(forecast["gapMessage"])
+
+    def use_forecast_suggestion(self):
+        suggestion = getattr(self, "forecast_suggestion", None)
+        if not suggestion:
+            return
+        if suggestion.get("availability") == "not in My Inventory":
+            self.source.set("all-bambu")
+        else:
+            self.planner_mode.set("best")
+        self.schedule_auto_preview()
+
+    def load_source_thumbnail(self, path):
+        source = Path(path)
+        if source.suffix.lower() != ".3mf":
+            self._show_preview_message("Textured source selected\nForecast palette will appear after planning")
+            return
+        destination = Path(tempfile.gettempdir()) / f"fullspectrum-source-{time.time_ns()}.png"
+
+        def worker():
+            try:
+                inspected = ENGINE.inspect_project(source, thumbnail_dest=destination, metadata_only=True)
+                thumbnail = inspected.get("thumbnail")
+                def display_thumbnail():
+                    if self.project.get() == str(source):
+                        self._show_source_thumbnail(thumbnail)
+                    elif thumbnail:
+                        Path(thumbnail).unlink(missing_ok=True)
+                self.after(0, display_thumbnail)
+            except Exception:
+                destination.unlink(missing_ok=True)
+                self.after(
+                    0,
+                    lambda: self._show_preview_message("Source loaded\nPreview image unavailable")
+                    if self.project.get() == str(source) else None,
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_source_thumbnail(self, path):
+        if not path or not Path(path).is_file():
+            self._show_preview_message("Source loaded\nPreview image unavailable")
+            return
+        try:
+            with Image.open(path) as source_image:
+                image = source_image.convert("RGB")
+            width = max(420, self.preview_canvas.winfo_width() - 24)
+            image.thumbnail((width, 276), Image.Resampling.LANCZOS)
+            self.source_preview_photo = ImageTk.PhotoImage(image)
+            self.preview_canvas.delete("all")
+            self.preview_canvas.create_image(
+                max(210, self.preview_canvas.winfo_width() / 2),
+                150,
+                image=self.source_preview_photo,
+            )
+        except Exception:
+            self._show_preview_message("Source loaded\nPreview image unavailable")
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+    def _show_preview_message(self, message):
+        self.source_preview_photo = None
+        self.preview_canvas.delete("all")
+        self.preview_canvas.create_text(
+            max(210, self.preview_canvas.winfo_width() / 2), 150,
+            text=message, fill="#768187", font=("Segoe UI", 12), justify="center",
+        )
 
     def choose_project(self):
         path = filedialog.askopenfilename(filetypes=[("FullSpectrum sources", "*.3mf *.obj *.glb"), ("Bambu 3MF", "*.3mf"), ("Textured model", "*.obj *.glb")])
@@ -178,6 +391,7 @@ class StudioApp(tk.Tk):
             if self.project.get() != path:
                 self.texture.set("")
             self.project.set(path)
+            self.load_source_thumbnail(path)
 
     def choose_reference(self):
         path = filedialog.askopenfilename(filetypes=[("Reference assets", "*.obj *.glb *.png *.jpg *.jpeg *.bmp *.tif *.tiff")])
@@ -201,28 +415,37 @@ class StudioApp(tk.Tk):
     def convert(self):
         self.start_operation(plan_only=False)
 
-    def start_operation(self, plan_only):
+    def start_operation(self, plan_only, automatic=False, operation_revision=None):
+        self.auto_preview_after = None
+        if self.worker_active:
+            if automatic:
+                self.auto_preview_dirty = True
+            return
         source = Path(self.project.get())
         if not source.is_file() or source.suffix.lower() not in (".3mf", ".obj", ".glb"):
-            messagebox.showerror("FullSpectrum Studio", "Choose a painted Bambu .3mf or textured OBJ / GLB source first.")
+            if not automatic:
+                messagebox.showerror("FullSpectrum Studio", "Choose a painted Bambu .3mf or textured OBJ / GLB source first.")
             return
         if self.source.get() == "custom" and not Path(self.custom.get()).is_file():
-            messagebox.showerror("FullSpectrum Studio", "Choose a custom filament JSON library.")
+            if not automatic:
+                messagebox.showerror("FullSpectrum Studio", "Choose a custom filament JSON library.")
             return
         self.preview_button.configure(state="disabled")
         self.convert_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
         self.folder_button.configure(state="disabled")
         self.copy_error_button.configure(state="disabled")
-        self.output.delete("1.0", "end")
+        if not automatic:
+            self.output.delete("1.0", "end")
         self.progress.set(0)
         self.cancel_requested = False
         self.worker_active = True
         self.last_error_report = ""
         self.last_error_log = None
         self.operation_name = "Plan preview" if plan_only else "Conversion"
-        self.record_progress(0, "Starting plan preview." if plan_only else "Starting conversion.")
+        self.record_progress(0, "Updating live forecast." if automatic else ("Starting plan preview." if plan_only else "Starting conversion."))
         self.start_heartbeat()
+        operation_revision = self.settings_revision if operation_revision is None else operation_revision
         options = {
             "strategy": self.strategy.get(),
             "source": self.source.get(),
@@ -238,9 +461,13 @@ class StudioApp(tk.Tk):
             "auto_open": self.auto_open.get(),
             "output_application": self.output_application.get(),
         }
-        threading.Thread(target=self._run_operation, args=(source, options, plan_only), daemon=True).start()
+        threading.Thread(
+            target=self._run_operation,
+            args=(source, options, plan_only, automatic, operation_revision),
+            daemon=True,
+        ).start()
 
-    def _run_operation(self, source, options, plan_only):
+    def _run_operation(self, source, options, plan_only, automatic, operation_revision):
         def report(fraction, message):
             if self.cancel_requested:
                 raise RuntimeError("Operation cancelled by user.")
@@ -268,7 +495,7 @@ class StudioApp(tk.Tk):
             )
             if plan_only:
                 text = format_plan_preview(result)
-                self.after(0, lambda: self.finish_plan(text))
+                self.after(0, lambda: self.finish_plan(result, text, automatic, operation_revision))
                 return
             text = [
                 f"Validated output: {result['output']}",
@@ -286,35 +513,58 @@ class StudioApp(tk.Tk):
             text.extend(f"Suggestion: {suggestion}" for suggestion in result["printability"]["recommendations"])
             text.extend(f"Warning: {warning}" for warning in result["warnings"])
             self.last_output = result["output"]
-            self.after(0, lambda: self.finish("\n".join(text)))
+            self.after(0, lambda: self.finish(result, "\n".join(text)))
             if options["auto_open"]:
                 self.open_validated_output(result["output"], options["output_application"])
         except Exception as error:
             details = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-            self.after(0, lambda: self.fail(str(error) or error.__class__.__name__, details))
+            self.after(0, lambda: self.fail(str(error) or error.__class__.__name__, details, quiet=automatic))
 
-    def finish(self, text):
+    def finish(self, result, text):
         self.worker_active = False
         self.preview_button.configure(state="normal")
+        self.output.delete("1.0", "end")
         self.output.insert("1.0", text)
+        self.update_forecast(result)
         self.status.set("Conversion validated and ready.")
         self.progress.set(100)
         self.convert_button.configure(state="normal")
         self.cancel_button.configure(state="disabled")
         self.folder_button.configure(state="normal")
+        self._resume_auto_preview_if_needed()
 
-    def finish_plan(self, text):
+    def finish_plan(self, result, text, automatic=False, operation_revision=None):
         self.worker_active = False
-        self.output.insert("1.0", text)
-        self.status.set("Plan preview ready. No 3MF was written.")
-        self.progress.set(100)
         self.preview_button.configure(state="normal")
         self.convert_button.configure(state="normal")
         self.cancel_button.configure(state="disabled")
         self.folder_button.configure(state="disabled")
+        if automatic and operation_revision != self.settings_revision:
+            self.status.set(
+                "Choices changed. Refreshing the live forecast."
+                if self.auto_preview.get() else "Automatic forecast paused."
+            )
+            self._resume_auto_preview_if_needed(force=True)
+            return
+        self.output.delete("1.0", "end")
+        self.output.insert("1.0", text)
+        self.update_forecast(result)
+        self.status.set(
+            f"Live forecast ready: {result['quality']['qualityScore']:.0f}% estimated accuracy."
+            if automatic else "Plan preview ready. No 3MF was written."
+        )
+        self.progress.set(100)
+        self._resume_auto_preview_if_needed()
 
-    def fail(self, message, details=None):
+    def fail(self, message, details=None, quiet=False):
         self.worker_active = False
+        if self.cancel_requested:
+            self.status.set(f"{self.operation_name} cancelled.")
+            self.preview_button.configure(state="normal")
+            self.convert_button.configure(state="normal")
+            self.cancel_button.configure(state="disabled")
+            self._resume_auto_preview_if_needed()
+            return
         suffix = "cancelled." if self.cancel_requested else "failed."
         self.status.set(f"{self.operation_name} {suffix}")
         self.preview_button.configure(state="normal")
@@ -324,7 +574,15 @@ class StudioApp(tk.Tk):
         self.output.delete("1.0", "end")
         report = self.build_error_report(message, details)
         self.output.insert("1.0", report)
-        messagebox.showerror("FullSpectrum Studio", privacy_safe_error_message(message))
+        if not quiet:
+            messagebox.showerror("FullSpectrum Studio", privacy_safe_error_message(message))
+        self._resume_auto_preview_if_needed()
+
+    def _resume_auto_preview_if_needed(self, force=False):
+        should_resume = force or self.auto_preview_dirty
+        self.auto_preview_dirty = False
+        if should_resume and self.auto_preview.get():
+            self.schedule_auto_preview()
 
     def cancel_conversion(self):
         self.cancel_requested = True

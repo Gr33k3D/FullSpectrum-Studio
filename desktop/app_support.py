@@ -13,7 +13,7 @@ def release_version():
     try:
         return (APP_ROOT / "VERSION").read_text(encoding="utf-8").strip()
     except OSError:
-        return "0.4.15"
+        return "0.5.0"
 
 
 APP_VERSION = release_version()
@@ -72,3 +72,49 @@ def format_plan_preview(result):
     lines.extend(f"Suggestion: {item}" for item in printability.get("recommendations", []))
     lines.extend(f"Warning: {warning}" for warning in result.get("warnings", []))
     return "\n".join(lines)
+
+
+def plan_forecast(result):
+    quality = result.get("quality", {})
+    real_slots = int(result.get("realSlots", 0))
+    output_slots = int(result.get("outputSlots", 0))
+    colors = list(result.get("outputColors") or [])
+    if not colors:
+        colors = [item.get("color") for item in result.get("anchors", []) if item.get("color")]
+        colors.extend(
+            item.get("preview")
+            for item in result.get("recipes", [])
+            if item.get("kind") == "MIX" and item.get("preview")
+        )
+
+    match = result.get("worstMatch") or {}
+    suggestion = match.get("suggestedFilament")
+    if float(match.get("deltaE", 0)) <= 3:
+        gap_message = "Palette coverage is within the reliable preview range."
+    elif suggestion:
+        prefix = (
+            "Missing from My Inventory"
+            if suggestion.get("availability") == "not in My Inventory"
+            else "Available in My Inventory"
+        )
+        gap_message = (
+            f"{prefix}: {suggestion.get('name')}. Worst target {match.get('targetColor')} becomes "
+            f"{match.get('predictedColor')} (dE {float(match.get('deltaE', 0)):.1f})."
+        )
+    elif match:
+        gap_message = (
+            f"Worst target {match.get('targetColor')} becomes {match.get('predictedColor')} "
+            f"(dE {float(match.get('deltaE', 0)):.1f})."
+        )
+    else:
+        gap_message = ""
+
+    return {
+        "accuracy": float(quality.get("qualityScore", 0)),
+        "confidence": float(quality.get("confidenceScore", 0)),
+        "maximumDeltaE": float(quality.get("maximumDeltaE", 0)),
+        "slotSummary": f"{real_slots} physical + {output_slots - real_slots} mixed",
+        "colors": colors,
+        "gapMessage": gap_message,
+        "suggestion": suggestion,
+    }

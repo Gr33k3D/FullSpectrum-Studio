@@ -182,6 +182,8 @@ struct ConverterService {
         outputDirectory: URL,
         progress: @escaping @Sendable (Double, String) -> Void
     ) async throws -> PlanPreviewResult {
+        let analysisDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FullSpectrum-LiveForecast-\(UUID().uuidString)", isDirectory: true)
         var arguments = [
                 "--json",
                 "--plan-preview",
@@ -193,6 +195,7 @@ struct ConverterService {
                 "--planner-mode", plannerMode.rawValue,
                 "--planning-sample", planningSample.rawValue,
                 "--mix-model", mixPrediction.rawValue,
+                "--analysis-dir", analysisDirectory.path,
                 "--output-dir", outputDirectory.path,
                 "--no-reveal",
                 file.path
@@ -212,11 +215,16 @@ struct ConverterService {
         if !pinnedAnchorKeys.isEmpty {
             arguments.insert(contentsOf: ["--anchors", pinnedAnchorKeys.joined(separator: ",")], at: arguments.count - 1)
         }
-        return try await execute(
-            arguments: arguments,
-            type: PlanPreviewResult.self,
-            progress: progress
-        )
+        do {
+            return try await execute(
+                arguments: arguments,
+                type: PlanPreviewResult.self,
+                progress: progress
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: analysisDirectory)
+            throw error
+        }
     }
 
     private struct DecodedOutput<T> {
@@ -237,6 +245,9 @@ struct ConverterService {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
             process.arguments = [engine.path] + arguments
+            var environment = ProcessInfo.processInfo.environment
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            process.environment = environment
             let stdout = Pipe()
             let stderr = Pipe()
             process.standardOutput = stdout

@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.5.0 Official Release - 2026-07-14
+
+### Live Forecast
+
+- Enables a debounced automatic plan forecast when the source model or planning
+  controls change, with Best planning and render-preview weighting as the
+  default workflow.
+- Generates a predicted reduced-color mesh, color-loss heatmap and anchor
+  influence view without writing a converted `.3mf`.
+- Reports estimated accuracy, confidence, maximum visible Delta E, expected
+  output swatches and the physical-plus-mixed slot plan before conversion.
+- Identifies the worst target-to-predicted color match and distinguishes a
+  better filament already in My Inventory from a better Bambu catalog filament
+  that is missing from My Inventory.
+
+### Desktop Apps
+
+- Redesigns the macOS planning inspector around the live forecast and shows the
+  predicted model directly in the movable 3D viewer.
+- Redesigns the Windows app as a split planning workspace with source thumbnail,
+  forecast gauge, palette swatches and actionable inventory guidance.
+- Keeps manual Preview Plan available while automatic forecasts stay in the
+  planning workspace and ignore stale results after controls change.
+
+### Compatibility And Validation
+
+- Retains the newer H2C three-value filament-vector compatibility fix from
+  0.4.16.
+- Prevents the bundled Python engine from writing bytecode into the signed
+  macOS app, so running a forecast no longer invalidates the app seal.
+- Adds regressions for forecast analysis assets, missing-inventory guidance and
+  the Windows forecast view model; all 62 engine and desktop tests pass.
+- Keeps submitted models, filenames, account details, inventory contents, local
+  paths and private logs out of the release.
+
 ## 0.4.16 Official Release - 2026-07-14
 
 ### Fixed

@@ -288,6 +288,8 @@ struct ConversionResult: Decodable {
     let qualityBiasMode: String?
     let validation: String
     let paintedSlots: [Int]
+    let outputColors: [String]?
+    let worstMatch: WorstColorMatch?
     let inventory: InventorySnapshot
     let anchors: [AnchorFilament]
     let recipes: [RecipeItem]
@@ -324,6 +326,9 @@ struct PlanPreviewResult: Decodable {
     let outputSlots: Int
     let qualityBias: Int
     let qualityBiasMode: String
+    let outputColors: [String]?
+    let analysisAssets: AnalysisAssets?
+    let worstMatch: WorstColorMatch?
     let anchors: [AnchorFilament]
     let recipes: [RecipeItem]
     let quality: QualityMetrics
@@ -401,6 +406,25 @@ struct AnalysisAssets: Decodable {
     let predictedMesh: String?
     let heatmapMesh: String?
     let anchorInfluenceMesh: String?
+}
+
+struct WorstColorMatch: Decodable {
+    let sourceSlot: Int
+    let targetColor: String
+    let predictedColor: String
+    let deltaE: Double
+    let paintedShare: Double
+    let severity: String
+    let suggestedFilament: SuggestedFilament?
+}
+
+struct SuggestedFilament: Decodable {
+    let key: String?
+    let name: String
+    let series: String?
+    let color: String
+    let estimatedDeltaE: Double
+    let availability: String
 }
 
 struct ImportSummary: Decodable {

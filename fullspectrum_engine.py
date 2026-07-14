@@ -28,6 +28,11 @@ from pathlib import Path
 from itertools import combinations
 from collections import Counter, defaultdict
 from functools import lru_cache
+
+# A packaged macOS engine runs from inside the signed app bundle. Local module
+# bytecode must stay out of that sealed Resources directory.
+sys.dont_write_bytecode = True
+
 from bambu_mixer_model import blend_color_multi as bambu_blend_color_multi
 
 BAMBU_PLA = [
@@ -2487,6 +2492,65 @@ def quality_metrics(rows, usage, old_colors=None, reference=None, mix_model="bam
     result["mixModel"]=mix_model
     return result
 
+def worst_color_match(rows, usage, palette_source, inventory, material_families=None):
+    """Describe the least accurate visible source color and a useful inventory fix."""
+    visible=[row for row in rows if float(usage.get(row[0],0.0))>0]
+    if not visible:
+        return None
+    total=sum(float(usage.get(row[0],0.0)) for row in visible) or 1.0
+    row=max(visible,key=lambda item:float(item[8]))
+    old_slot,_,target,_,_,_,_,preview,error,*_=row
+    result={
+        "sourceSlot":old_slot,
+        "targetColor":target,
+        "predictedColor":preview,
+        "deltaE":round(float(error),2),
+        "paintedShare":round(float(usage.get(old_slot,0.0))*100/total,1),
+        "severity":"good" if float(error)<=3 else ("notice" if float(error)<=8 else "poor"),
+        "suggestedFilament":None,
+    }
+    if palette_source!="inventory" or float(error)<=3:
+        return result
+
+    owned=filter_material_families(inventory_palette(inventory),material_families)
+    owned_colors={anchor_color(item) for item in owned}
+    owned_suggestion=min(owned,key=lambda item:dist(target,anchor_color(item))) if owned else None
+    owned_error=dist(target,anchor_color(owned_suggestion)) if owned_suggestion else float("inf")
+    if owned_suggestion is not None and owned_error+0.5<float(error):
+        result["suggestedFilament"]={
+            "key":anchor_key(owned_suggestion),
+            "name":anchor_name(owned_suggestion),
+            "series":str(owned_suggestion.get("series") or filament_family(anchor_name(owned_suggestion))).strip(),
+            "color":anchor_color(owned_suggestion),
+            "estimatedDeltaE":round(owned_error,2),
+            "availability":"in My Inventory",
+        }
+        return result
+    missing=[
+        item for item in catalog_palette("all")
+        if anchor_color(item) not in owned_colors
+    ]
+    if material_families:
+        allowed=set(normalize_material_families(material_families))
+        matching=[item for item in missing if item.get("series") in allowed]
+        if matching:
+            missing=matching
+    if not missing:
+        return result
+    suggested=min(missing,key=lambda item:dist(target,anchor_color(item)))
+    suggested_error=dist(target,anchor_color(suggested))
+    if suggested_error+0.5 >= float(error):
+        return result
+    result["suggestedFilament"]={
+        "key":anchor_key(suggested),
+        "name":anchor_name(suggested),
+        "series":str(suggested.get("series") or filament_family(anchor_name(suggested))).strip(),
+        "color":anchor_color(suggested),
+        "estimatedDeltaE":round(suggested_error,2),
+        "availability":"not in My Inventory",
+    }
+    return result
+
 def printability_metrics(rows, usage, real_count, output_count, layouts, project):
     weights={slot:float(usage.get(slot,0)) for slot,*_ in rows}
     total=sum(weights.values()) or 1.0
@@ -2606,7 +2670,7 @@ def plan_preview_payload(infile, mode, palette_source, planner_mode, planning_sa
                          real_count, newc, rows, anchors, real_profiles, quality_bias,
                          quality_bias_mode, quality, printability, recommendation,
                          reference_result, imported, warnings, material_families=None,
-                         pinned_anchor_keys=None):
+                         pinned_anchor_keys=None, analysis_assets=None, worst_match=None):
     return {
         "type":"planPreview",
         "input":str(infile),
@@ -2626,6 +2690,9 @@ def plan_preview_payload(infile, mode, palette_source, planner_mode, planning_sa
         "qualityBias":quality_bias,
         "qualityBiasMode":quality_bias_mode,
         "quality":quality,
+        "outputColors":newc,
+        "analysisAssets":analysis_assets,
+        "worstMatch":worst_match,
         "printability":printability,
         "recommendation":recommendation,
         "reference":reference_result,
@@ -2797,6 +2864,59 @@ def analysis_preview_colors(output_colors, rows, real_count):
     influence=[influence_palette[(anchor_for_slot.get(slot,min(slot,real_count))-1)%len(influence_palette)]
                for slot in range(1,len(output_colors)+1)]
     return heat,influence
+
+def plan_analysis_preview_colors(old_colors, rows, real_count):
+    """Color the source preview with its predicted plan before a 3MF is written."""
+    row_by_source={row[0]:row for row in rows}
+    influence_palette=["#28B8D5","#E86C8C","#EDC949","#4E79A7","#59A14F","#B07AA1"]
+    predicted=[]
+    heat=[]
+    influence=[]
+    for old_slot,original in enumerate(old_colors,start=1):
+        row=row_by_source.get(old_slot)
+        if row is None:
+            predicted.append(original)
+            heat.append(heatmap_color(0.0))
+            influence.append(influence_palette[(old_slot-1)%len(influence_palette)])
+            continue
+        predicted.append(row[7])
+        heat.append(heatmap_color(float(row[8])))
+        if row[3]=="ANCHOR":
+            anchor_slot=max(1,min(real_count,row[1]))
+        else:
+            components=[int(value) for value in row[5].split(",") if value]
+            anchor_slot=components[0] if components else max(1,min(real_count,row[1]))
+        influence.append(influence_palette[(anchor_slot-1)%len(influence_palette)])
+    return predicted,heat,influence
+
+def build_plan_analysis_assets(project_file, old_colors, rows, real_count, analysis_dir, warnings,
+                               progress=lambda fraction,message: None):
+    if not analysis_dir:
+        return None
+    analysis_root=Path(analysis_dir).expanduser().resolve()
+    analysis_root.mkdir(parents=True,exist_ok=True)
+    predicted_colors,heat_colors,influence_colors=plan_analysis_preview_colors(old_colors,rows,real_count)
+    with zipfile.ZipFile(project_file) as archive:
+        metrics=project_mesh_metrics(archive)
+        optimized=metrics["triangleCount"]>MAX_INTERACTIVE_PREVIEW_TRIANGLES
+        progress(0.86,"Building live predicted palette preview")
+        predicted=export_preview_mesh(
+            archive,predicted_colors,analysis_root/"plan-predicted.obj","slot",
+            grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION if optimized else PREVIEW_GRID_RESOLUTION,
+        )
+    if optimized:
+        warnings.append(
+            "Using an optimized display mesh for the live forecast; the source print geometry is unchanged."
+        )
+    heatmap=(recolor_preview_mesh(predicted,heat_colors,analysis_root/"plan-color-loss.obj","slot")
+             if predicted else None)
+    influence=(recolor_preview_mesh(predicted,influence_colors,analysis_root/"plan-anchor-influence.obj","slot")
+               if predicted else None)
+    return {
+        "predictedMesh":str(predicted) if predicted else None,
+        "heatmapMesh":str(heatmap) if heatmap else None,
+        "anchorInfluenceMesh":str(influence) if influence else None,
+    }
 
 def remap_paint_codes_by_codec(tmp, old_slot_to_new_slot, oldn, newn):
     patched=[]
@@ -3297,6 +3417,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             quality["smartSearchMode"]=smart_search_mode
             quality["skippedQualityCandidates"]=skipped_quality_candidates
         printability=printability_metrics(rows,usage,real_count,newn,layouts,obj)
+        worst_match=worst_color_match(rows,usage,palette_source,inventory,material_families)
         mix_limit=quality_mix_limit(quality_bias)
         unmatched=[
             row for row in rows
@@ -3331,12 +3452,16 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
                                 ". Use Exact CMYKW or load closer colors for true roles.")
         real_profiles,mixed_profile=project_compatible_profiles(obj,anchors)
         if plan_only:
+            analysis_assets=build_plan_analysis_assets(
+                project_file,old,rows,real_count,analysis_dir,warnings,progress
+            )
             progress(1.0,"Plan preview ready. No 3MF was written.")
             return plan_preview_payload(
                 infile,mode,palette_source,planner_mode,planning_sample,
                 catalog_region,region_label,catalog_source_label,oldn,real_count,newc,rows,
                 anchors,real_profiles,quality_bias,quality_bias_mode,quality,printability,
-                recommendation,reference_result,imported,warnings,material_families,pinned_anchor_keys
+                recommendation,reference_result,imported,warnings,material_families,pinned_anchor_keys,
+                analysis_assets,worst_match
             )
 
         representatives=source_slot_representatives(old,anchors,old_slot_to_new_slot,rows,newn)
@@ -3544,6 +3669,8 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "qualityBiasMode":quality_bias_mode,
             "validation":"OK",
             "paintedSlots":sorted(output_usage),
+            "outputColors":newc,
+            "worstMatch":worst_match,
             "quality":quality,
             "colorValidation":color_validation,
             "printability":printability,

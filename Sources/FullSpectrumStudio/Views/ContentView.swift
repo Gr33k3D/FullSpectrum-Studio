@@ -63,7 +63,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: store.planPreview?.filename) { _, filename in
-            if filename != nil {
+            if filename != nil, !store.planPreviewWasAutomatic {
                 inspectorSection = .results
                 sidebarVisible = true
             } else if store.result == nil, store.selectedFile != nil, inspectorSection == .results {

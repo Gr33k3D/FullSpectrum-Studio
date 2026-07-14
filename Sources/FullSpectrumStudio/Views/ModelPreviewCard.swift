@@ -80,6 +80,22 @@ struct ModelPreviewCard: View {
                             .padding(.horizontal, 12)
                             .padding(.top, 8)
                         }
+                        .overlay(alignment: .topLeading) {
+                            if let quality = store.forecastQuality,
+                               [.predicted, .validation, .colorLoss, .anchorInfluence].contains(store.previewMode) {
+                                Label("\(Int(quality.qualityScore.rounded()))% estimated", systemImage: "sparkles")
+                                    .font(.caption.monospacedDigit().weight(.semibold))
+                                    .foregroundStyle(Color.studioPrimaryText)
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 32)
+                                    .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                            .stroke(Color.studioAccent.opacity(0.32), lineWidth: 1)
+                                    }
+                                    .padding(12)
+                            }
+                        }
                 } else if store.previewMode == .plateImage, let image = store.previewImage {
                     Image(nsImage: image)
                         .resizable()

@@ -62,6 +62,34 @@ class WindowsDesktopTests(unittest.TestCase):
         )
         self.assertNotIn("privately named object", ordinary_report.lower())
 
+    def test_live_forecast_exposes_accuracy_palette_and_inventory_gap(self):
+        result = {
+            "realSlots": 4,
+            "outputSlots": 6,
+            "outputColors": ["#FFFFFF", "#0047BB", "#FF9016", "#9D2235", "#14676D", "#847D48"],
+            "quality": {
+                "qualityScore": 61.4,
+                "confidenceScore": 72.0,
+                "maximumDeltaE": 31.2,
+            },
+            "worstMatch": {
+                "targetColor": "#000000",
+                "predictedColor": "#0047BB",
+                "deltaE": 31.2,
+                "suggestedFilament": {
+                    "name": "PLA Basic Black",
+                    "availability": "not in My Inventory",
+                },
+            },
+        }
+
+        forecast = app_support.plan_forecast(result)
+
+        self.assertEqual(forecast["accuracy"], 61.4)
+        self.assertEqual(forecast["slotSummary"], "4 physical + 2 mixed")
+        self.assertEqual(forecast["colors"][1], "#0047BB")
+        self.assertIn("Missing from My Inventory: PLA Basic Black", forecast["gapMessage"])
+
 
 if __name__ == "__main__":
     unittest.main()
