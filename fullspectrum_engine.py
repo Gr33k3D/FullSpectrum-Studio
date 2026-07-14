@@ -3021,7 +3021,7 @@ def filament_array_layouts(obj,oldn):
                 layouts[key]=("matrix",blocks)
         elif length % oldn == 0:
             width=length//oldn
-            if width in (1,2,4):
+            if width in (1,2,3,4):
                 layouts[key]=("slot",width)
     return layouts
 

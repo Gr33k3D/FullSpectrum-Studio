@@ -915,6 +915,37 @@ class ConversionTests(unittest.TestCase):
             [str(slot) for slot in range(1, len(representatives) + 1) for _ in range(2)],
         )
 
+    def test_h2c_three_value_filament_arrays_grow_as_complete_slot_blocks(self):
+        old_colors = ["#FFFFFF", "#000000", "#FF9016", "#14676D", "#9D2235"]
+        old_count = len(old_colors)
+        obj = {
+            "filament_colour": old_colors[:],
+            "filament_self_index": [
+                str(slot) for slot in range(1, old_count + 1) for _ in range(3)
+            ],
+            "filament_flow_ratio": [
+                f"{slot}.{variant}"
+                for slot in range(1, old_count + 1)
+                for variant in range(3)
+            ],
+        }
+        layouts = ENGINE.filament_array_layouts(obj, old_count)
+        representatives = [1, 2, 3, 4, 5, 4]
+        new_colors = [old_colors[index - 1] for index in representatives]
+
+        ENGINE.resize_project_filament_arrays(
+            obj, old_count, representatives, layouts, old_colors, new_colors
+        )
+
+        self.assertEqual(layouts["filament_self_index"], ("slot", 3))
+        self.assertEqual(layouts["filament_flow_ratio"], ("slot", 3))
+        self.assertEqual(len(obj["filament_flow_ratio"]), 3 * len(representatives))
+        self.assertEqual(obj["filament_flow_ratio"][-3:], ["4.0", "4.1", "4.2"])
+        self.assertEqual(
+            obj["filament_self_index"],
+            [str(slot) for slot in range(1, len(representatives) + 1) for _ in range(3)],
+        )
+
     def test_model_extruder_assignment_keeps_unpainted_slot_in_planning(self):
         with tempfile.TemporaryDirectory() as folder_name:
             folder = Path(folder_name)

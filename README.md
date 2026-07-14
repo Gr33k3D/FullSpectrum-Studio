@@ -10,9 +10,9 @@ The source project is never modified.
 This is an independent community release built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest public package: [v0.4.15 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.15).
-See the [v0.4.15 release notes](docs/RELEASE_NOTES_0.4.15.md) for printer-matched
-filament presets and automatic physical-slot limits.
+Latest public package: [v0.4.16 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.16).
+See the [v0.4.16 release notes](docs/RELEASE_NOTES_0.4.16.md) for the newer H2C
+project compatibility fix.
 
 ## What It Does
 
@@ -321,6 +321,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
+- [0.4.16 Release Notes](docs/RELEASE_NOTES_0.4.16.md)
 - [0.4.15 Release Notes](docs/RELEASE_NOTES_0.4.15.md)
 - [0.4.14 Release Notes](docs/RELEASE_NOTES_0.4.14.md)
 - [0.4.13 Release Notes](docs/RELEASE_NOTES_0.4.13.md)

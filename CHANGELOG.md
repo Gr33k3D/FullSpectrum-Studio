@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.16 Official Release - 2026-07-14
+
+### Fixed
+
+- Resizes the three-value-per-filament setting arrays written by newer H2C
+  project files when FullSpectrum changes the output filament count.
+- Prevents Bambu Studio's `vector` import error and the follow-on missing
+  geometry warning for those projects.
+
+### Validation
+
+- Adds a regression for growing a five-filament H2C project to five physical
+  filaments plus one logical mixed slot.
+- Reopens and slices the reported H2C project in Bambu Studio with intact
+  geometry, five physical filaments, one mixed slot and preserved eye details.
+
 ## 0.4.15 Official Release - 2026-07-14
 
 ### Fixed
