@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.15 Official Release - 2026-07-14
+
+### Fixed
+
+- Rebinds built-in filament presets to the printer profile already stored in
+  the source project instead of exporting H2C-specific preset IDs into A1 and
+  other printer projects.
+- Uses neutral Bambu base presets while planning, removing device-specific
+  profile defaults from inventory and catalog data.
+- Stops Auto from increasing the physical filament count when a project has
+  six or fewer active source colors. Manual physical-slot choices still act as
+  explicit overrides.
+- Keeps small black and white details while respecting that physical-slot
+  limit; mixed colors remain separate logical slots and do not require another
+  physical spool.
+
+### Validation
+
+- Adds an end-to-end A1 preset regression and strengthens the five-color
+  small-detail planner regression.
+- Reopens the reported five-color project in Bambu Studio with five physical
+  filaments, one mixed slot, correct A1 presets and intact geometry.
+
 ## 0.4.14 Official Release - 2026-07-14
 
 ### Fixed

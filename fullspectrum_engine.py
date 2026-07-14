@@ -127,7 +127,7 @@ def release_version():
             return value
     except OSError:
         pass
-    return "0.4.14"
+    return "0.4.15"
 
 
 APP_VERSION = release_version()
@@ -167,24 +167,24 @@ XML_ATTRIBUTE_PATTERN = re.compile(r'([A-Za-z_:][\w:.-]*)="([^"]*)"')
 VERTEX_TAG_PATTERN = re.compile(r'<(?:[A-Za-z_][\w:.-]*:)?vertex\b[^>]*>')
 TRIANGLE_TAG_PATTERN = re.compile(r'<(?:[A-Za-z_][\w:.-]*:)?triangle\b[^>]*>')
 PROFILE_BY_FAMILY = {
-    "PLA Basic": ("Bambu PLA Basic @BBL H2C 0.2 nozzle", "GFA00"),
-    "PLA Matte": ("Bambu PLA Matte @BBL H2C 0.2 nozzle", "GFA01"),
-    "PLA Silk": ("Bambu PLA Silk @BBL H2C 0.2 nozzle", "GFA05"),
-    "PLA Silk+": ("Bambu PLA Silk+ @BBL H2C 0.2 nozzle", "GFA06"),
-    "PLA Marble": ("Bambu PLA Marble @BBL H2C", "GFA07"),
-    "PLA Sparkle": ("Bambu PLA Sparkle @BBL X1C", "GFA08"),
-    "PLA Tough": ("Bambu PLA Tough @BBL H2S", "GFA09"),
-    "PLA Tough+": ("Bambu PLA Tough+ @BBL H2D 0.6 nozzle", "GFA10"),
-    "PLA Aero": ("Bambu PLA Aero @BBL H2S", "GFA11"),
+    "PLA Basic": ("Bambu PLA Basic @base", "GFA00"),
+    "PLA Matte": ("Bambu PLA Matte @base", "GFA01"),
+    "PLA Silk": ("Bambu PLA Silk @base", "GFA05"),
+    "PLA Silk+": ("Bambu PLA Silk+ @base", "GFA06"),
+    "PLA Marble": ("Bambu PLA Marble @base", "GFA07"),
+    "PLA Sparkle": ("Bambu PLA Sparkle @base", "GFA08"),
+    "PLA Tough": ("Bambu PLA Tough @base", "GFA09"),
+    "PLA Tough+": ("Bambu PLA Tough+ @base", "GFA10"),
+    "PLA Aero": ("Bambu PLA Aero @base", "GFA11"),
     "PLA Glow": ("Bambu PLA Glow @base", "GFA12"),
-    "PLA Dynamic": ("Bambu PLA Dynamic @BBL H2C 0.2 nozzle", "GFA13"),
-    "PLA Galaxy": ("Bambu PLA Galaxy @BBL X2D 0.4 nozzle", "GFA15"),
+    "PLA Dynamic": ("Bambu PLA Dynamic @base", "GFA13"),
+    "PLA Galaxy": ("Bambu PLA Galaxy @base", "GFA15"),
     "PLA Wood": ("Bambu PLA Wood @base", "GFA16"),
-    "PLA Translucent": ("Bambu PLA Translucent @BBL H2D 0.2 nozzle", "GFA17"),
-    "PLA Lite": ("Bambu PLA Lite @BBL H2DP 0.2 nozzle", "GFA18"),
-    "PLA Pure": ("Bambu PLA Pure @BBL P1P 0.2 nozzle", "GFA19"),
-    "PLA-CF": ("Bambu PLA-CF @BBL X1C 0.8 nozzle", "GFA50"),
-    "PLA Metal": ("Bambu PLA Metal @BBL X1C 0.2 nozzle", "GFA02"),
+    "PLA Translucent": ("Bambu PLA Translucent @base", "GFA17"),
+    "PLA Lite": ("Bambu PLA Lite @base", "GFA18"),
+    "PLA Pure": ("Bambu PLA Pure @base", "GFA19"),
+    "PLA-CF": ("Bambu PLA-CF @base", "GFA50"),
+    "PLA Metal": ("Bambu PLA Metal @base", "GFA02"),
 }
 MIXED_PROFILE_ID, MIXED_FILAMENT_ID = PROFILE_BY_FAMILY["PLA Basic"]
 BAMBU_STUDIO_CATALOG_LOCATIONS = [
@@ -623,6 +623,32 @@ def profile_for_anchor(name):
             return PROFILE_BY_FAMILY[family]
     return PROFILE_BY_FAMILY["PLA Basic"]
 
+def project_preset_suffix(project):
+    suffixes=Counter()
+    for value in project.get("filament_settings_id",[]):
+        match=re.search(r"(@.+)$",str(value or "").strip())
+        if match:
+            suffixes[match.group(1)]+=1
+    return suffixes.most_common(1)[0][0] if suffixes else None
+
+def compatible_project_preset(project, preset, family=None):
+    preset=str(preset or "").strip()
+    suffix=project_preset_suffix(project)
+    if not suffix or not preset.startswith("Bambu "):
+        return preset
+    base=f"Bambu {family}" if family else preset.split(" @",1)[0]
+    return f"{base} {suffix}"
+
+def project_compatible_profiles(project, anchors):
+    profiles=[]
+    for anchor in anchors:
+        family=str(anchor.get("series") or filament_family(anchor_name(anchor))).strip()
+        fallback_preset,fallback_id=profile_for_anchor(family)
+        preset=compatible_project_preset(project,anchor.get("preset") or fallback_preset,family)
+        profiles.append((preset,str(anchor.get("filamentID") or fallback_id)))
+    mixed_preset=compatible_project_preset(project,MIXED_PROFILE_ID,"PLA Basic")
+    return profiles,(mixed_preset,MIXED_FILAMENT_ID)
+
 def filament_family(name):
     families=sorted(PROFILE_BY_FAMILY,key=len,reverse=True)
     return next((family for family in families if name == family or name.startswith(f"{family} ")), "PLA Basic")
@@ -777,7 +803,7 @@ def read_bambu_inventory(required=True, minimum_colors=MIN_REAL_SLOTS):
             "series":series,
             "brand":str(raw.get("brand") or "Bambu Lab"),
             "color":color,
-            "preset":f"Bambu {series} @BBL H2C 0.2 nozzle",
+            "preset":profile_for_anchor(series)[0],
             "filamentID":setting_id,
             "remainingGrams":round(remaining,1),
             "initialGrams":round(float(raw.get("initial_weight") or remaining),1),
@@ -2315,7 +2341,11 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
     ]
     if requested is None and mode!="cmykw":
         active_target_colors=len({hx(color) for _,color,weight in used if weight>0})
-        if active_target_colors>=18:
+        auto_ceiling=max(minimum,min(maximum,active_target_colors),len(pinned_anchors))
+        counts=[count for count in counts if count<=auto_ceiling]
+        if active_target_colors<=DEFAULT_AUTO_MAX_REAL_SLOTS:
+            counts=[count for count in counts if count==auto_ceiling]
+        elif active_target_colors>=18:
             counts=[count for count in counts if count>=5]
         elif active_target_colors>=10:
             counts=[count for count in counts if count>=4]
@@ -3299,7 +3329,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             if poor:
                 warnings.append("Approximate inventory CMYKW roles: " + ", ".join(poor) +
                                 ". Use Exact CMYKW or load closer colors for true roles.")
-        real_profiles=[(anchor["preset"],anchor["filamentID"]) for anchor in anchors]
+        real_profiles,mixed_profile=project_compatible_profiles(obj,anchors)
         if plan_only:
             progress(1.0,"Plan preview ready. No 3MF was written.")
             return plan_preview_payload(
@@ -3318,8 +3348,8 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         progress(0.58,"Preserving source purge transitions and filament properties")
         resize_project_filament_arrays(obj,oldn,representatives,layouts,old,newc)
         obj["filament_colour"]=newc
-        obj["filament_settings_id"]=[preset for preset,_ in real_profiles]+[MIXED_PROFILE_ID]*(newn-real_count)
-        obj["filament_ids"]=[filament_id for _,filament_id in real_profiles]+[MIXED_FILAMENT_ID]*(newn-real_count)
+        obj["filament_settings_id"]=[preset for preset,_ in real_profiles]+[mixed_profile[0]]*(newn-real_count)
+        obj["filament_ids"]=[filament_id for _,filament_id in real_profiles]+[mixed_profile[1]]*(newn-real_count)
         obj["filament_is_mixed"]=ism
         obj["filament_mixed_components"]=comps
         obj["filament_mixed_sublayer_ratios"]=ratios

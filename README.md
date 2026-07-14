@@ -10,9 +10,9 @@ The source project is never modified.
 This is an independent community release built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest public package: [v0.4.14 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.14).
-See the [v0.4.14 release notes](docs/RELEASE_NOTES_0.4.14.md) for small-detail
-color preservation, H2C regression coverage and privacy-safe support reports.
+Latest public package: [v0.4.15 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.4.15).
+See the [v0.4.15 release notes](docs/RELEASE_NOTES_0.4.15.md) for printer-matched
+filament presets and automatic physical-slot limits.
 
 ## What It Does
 
@@ -25,6 +25,8 @@ color preservation, H2C regression coverage and privacy-safe support reports.
 - Chooses `2-6` physical filament anchors automatically or manually, then adds
   only mixed recipes whose estimated visual gain justifies the extra logical
   color. Identical recipes reuse one slot.
+- Auto does not increase the physical filament count of projects with six or
+  fewer active source colors. Explicit manual slot choices remain available.
 - Smart quality mode automatically compares practical, balanced, detail and
   high-detail plans, then keeps the best validated result for the model's
   painted usage.
@@ -319,6 +321,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
+- [0.4.15 Release Notes](docs/RELEASE_NOTES_0.4.15.md)
 - [0.4.14 Release Notes](docs/RELEASE_NOTES_0.4.14.md)
 - [0.4.13 Release Notes](docs/RELEASE_NOTES_0.4.13.md)
 - [0.4.12 macOS H2C Notes](docs/RELEASE_NOTES_0.4.12_MACOS.md)

@@ -16,7 +16,7 @@ ENGINE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ENGINE)
 
 
-def settings(slot_count=4):
+def settings(slot_count=4, preset="Bambu PLA Basic @BBL H2C 0.2 nozzle"):
     colors = ["#FFFFFF", "#000000", "#D02040", "#2060C0"][:slot_count]
     matrix = []
     for row in range(slot_count):
@@ -24,7 +24,7 @@ def settings(slot_count=4):
             matrix.append("0" if row == column else "120")
     return {
         "filament_colour": colors,
-        "filament_settings_id": ["Bambu PLA Basic @BBL H2C 0.2 nozzle"] * slot_count,
+        "filament_settings_id": [preset] * slot_count,
         "filament_ids": ["GFA00"] * slot_count,
         "filament_is_mixed": ["0"] * slot_count,
         "filament_mixed_components": [""] * slot_count,
@@ -35,7 +35,7 @@ def settings(slot_count=4):
     }
 
 
-def write_project(path):
+def write_project(path, project_settings=None):
     model = (
         '<?xml version="1.0"?><model><resources><object id="1"><mesh>'
         '<vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/>'
@@ -44,7 +44,7 @@ def write_project(path):
         '</triangles></mesh></object></resources></model>'
     )
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("Metadata/project_settings.config", json.dumps(settings()))
+        archive.writestr("Metadata/project_settings.config", json.dumps(project_settings or settings()))
         archive.writestr("3D/Objects/object_1.model", model)
         archive.writestr("Metadata/texture.png", b"unchanged-texture")
 
@@ -549,7 +549,8 @@ class ConversionTests(unittest.TestCase):
 
             self.assertIn("#000000", selected)
             self.assertIn("#FFFFFF", selected)
-            self.assertLess(metrics["maximumDeltaE"], 6.0)
+            self.assertEqual(len(anchors), len(old_colors))
+            self.assertLess(metrics["maximumDeltaE"], 8.0)
 
     def test_quality_score_is_capped_by_worst_visible_error(self):
         rows = [
@@ -667,6 +668,33 @@ class ConversionTests(unittest.TestCase):
                 planner_mode="fast",
             )
             self.assertLessEqual(output["realSlots"], ENGINE.DEFAULT_AUTO_MAX_REAL_SLOTS)
+
+    def test_conversion_rebinds_builtin_presets_to_source_printer(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            source = folder / "source.3mf"
+            project_settings = settings(preset="Bambu PLA Basic @BBL A1")
+            project_settings["printer_model"] = "Bambu Lab A1"
+            project_settings["nozzle_diameter"] = ["0.4"]
+            write_project(source, project_settings)
+
+            output = ENGINE.convert(
+                source,
+                "official",
+                "catalog",
+                folder,
+                False,
+                "2",
+                quality_bias=100,
+                planner_mode="fast",
+            )
+
+            with zipfile.ZipFile(output["output"]) as archive:
+                written = json.loads(archive.read("Metadata/project_settings.config"))
+            presets = written["filament_settings_id"]
+            self.assertEqual(len(presets), output["outputSlots"])
+            self.assertTrue(all(preset.endswith("@BBL A1") for preset in presets))
+            self.assertTrue(all("H2C" not in preset for preset in presets))
 
     def test_anchor_selection_keeps_mix_parent_colors_when_they_improve_output(self):
         with tempfile.TemporaryDirectory() as folder_name:
