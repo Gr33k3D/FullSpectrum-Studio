@@ -64,22 +64,21 @@ inventory data and raw engine output.
 
 ## Preview
 
-![FullSpectrum Studio predicted preview and palette validation](teasers/v0.4.3-predicted.png)
+![FullSpectrum Studio v0.5.0 automatic angel palette forecast](teasers/v0.5.0-predicted.png)
 
-Preview estimates from a validated local test project; this is not a calibrated
-printed-color measurement. Screenshots demonstrate view modes from a detail
-run; the documented benchmark uses its stated validated planning setting, so
-logical mixed-slot counts can differ.
+Version v0.5.0's Live Forecast is shown here with a local angel demo. It
+automatically compares palette plans and previews the expected colors,
+estimated accuracy, confidence and worst visible match before a converted
+`.3mf` is written. Estimates are not calibrated printed-color measurements.
 
-Version v0.4.3 centers the viewer, adds fullscreen viewing and color-debug
-comparison, displays target and exported mixed swatches separately, and
-corrects mixed-color preview synchronization with Bambu Studio.
+The source demo model remains private and is not included in this repository;
+only raster screenshots are published.
 
-Additional real-project views:
-[original plate](teasers/v0.4.3-original.png) |
-[validation](teasers/v0.4.3-validation.png) |
-[color-loss heatmap](teasers/v0.4.3-heatmap.png) |
-[anchor influence](teasers/v0.4.3-anchor.png)
+Additional v0.5.0 forecast views:
+[original](teasers/v0.5.0-original.png) |
+[validation](teasers/v0.5.0-validation.png) |
+[color-loss heatmap](teasers/v0.5.0-heatmap.png) |
+[anchor influence](teasers/v0.5.0-anchor.png)
 
 ## Validation
 

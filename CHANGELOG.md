@@ -35,6 +35,12 @@
 - Keeps submitted models, filenames, account details, inventory contents, local
   paths and private logs out of the release.
 
+### Documentation
+
+- Refreshes the README screenshots with the v0.5.0 Live Forecast UI and a local
+  angel demo. Only raster captures are published; the source `.3mf` remains
+  private.
+
 ## 0.4.16 Official Release - 2026-07-14
 
 ### Fixed
