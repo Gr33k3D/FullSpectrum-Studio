@@ -34,6 +34,7 @@ THE SOFTWARE.
 """
 
 import base64
+from functools import lru_cache
 from itertools import combinations_with_replacement
 import lzma
 import struct
@@ -62,6 +63,10 @@ def _powers():
 
 
 _POWERS = _powers()
+_ACTIVE_POWERS = tuple(
+    tuple((index, exponent) for index, exponent in enumerate(powers) if exponent)
+    for powers in _POWERS
+)
 assert len(_POWERS) == 330
 
 
@@ -69,11 +74,13 @@ def _float32(value):
     return struct.unpack("<f", struct.pack("<f", float(value)))[0]
 
 
+@lru_cache(maxsize=4096)
 def _hex_rgb(value):
     value = str(value).lstrip("#")
     return tuple(int(value[index:index + 2], 16) for index in (0, 2, 4))
 
 
+@lru_cache(maxsize=262_144)
 def _lerp(first, second, ratio):
     ratio = _float32(ratio)
     if ratio <= 0.0:
@@ -81,20 +88,15 @@ def _lerp(first, second, ratio):
     if ratio >= 1.0:
         return second
     values = first + second + (float(ratio),)
-    features = []
-    for powers in _POWERS:
+    channels = list(_INTERCEPT)
+    for active_powers, coefficient in zip(_ACTIVE_POWERS, _COEFFICIENTS):
         feature = 1.0
-        for value, exponent in zip(values, powers):
-            if exponent:
-                feature *= value ** exponent
-        features.append(feature)
-    channels = []
-    for channel in range(3):
-        total = _INTERCEPT[channel]
-        for feature, coefficient in zip(features, _COEFFICIENTS):
-            total += feature * coefficient[channel]
-        channels.append(max(0, min(255, int(total))))
-    return tuple(channels)
+        for index, exponent in active_powers:
+            feature *= values[index] ** exponent
+        channels[0] += feature * coefficient[0]
+        channels[1] += feature * coefficient[1]
+        channels[2] += feature * coefficient[2]
+    return tuple(max(0, min(255, int(channel))) for channel in channels)
 
 
 def blend_color_multi(hex_colors, weights):

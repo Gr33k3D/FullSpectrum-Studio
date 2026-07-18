@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.1 Official Release - 2026-07-18
+
+### Fixed
+
+- Reads the most recently updated Bambu Studio Filament Manager inventory when
+  both the main and Beta profiles exist. This prevents an older Beta file from
+  hiding a recently added spool from My Inventory planning.
+- Lets the inventory screen load with zero or one active color. Conversion
+  still explains when the chosen plan needs more distinct physical colors.
+
+### Filament Controls
+
+- Adds an enabled-color selector to macOS and Windows. Each row shows its
+  swatch, filament family and remaining grams when the color is locally owned.
+- Keeps color eligibility separate from anchor pins. Disabled colors cannot be
+  selected by the planner or returned as owned recommendations.
+
+### Performance
+
+- Reuses the reduced viewport mesh for render weighting, predicted previews,
+  heatmaps and anchor-influence overlays instead of parsing the same model for
+  every view.
+- Reads plan-only settings and paint states directly from the 3MF archive,
+  skipping extraction and preservation hashing until an output is written.
+- Caches exact Bambu mixer calculations and common color-distance work without
+  changing recipe search depth, display resolution or validation rules.
+- On the local 84 MB, 5.4-million-triangle verification project, a cached
+  Best/Smart forecast fell from about 77 seconds to 15 seconds. A complete
+  cached conversion, archive reopen and validation took about 27 seconds.
+
+### Validation And Privacy
+
+- Adds regressions for inventory-profile freshness, allowed-color enforcement,
+  plan-only archive handling and preview-cache reuse. All 65 engine and desktop
+  tests pass.
+- Keeps private models, filenames, paths, spool contents and quantities out of
+  the repository and release notes.
+
 ## 0.5.0 Official Release - 2026-07-14
 
 ### Live Forecast

@@ -76,7 +76,7 @@ depends on loaded filament, printing conditions, illumination and calibration.
 Supported:
 
 - Painted Bambu Studio `.3mf` conversion to a separate validated output.
-- Local read-only Bambu Studio Beta inventory, Bambu planning palettes, exact
+- Local read-only Bambu Studio inventory, Bambu planning palettes, exact
   CMYKW roles and local custom filament libraries.
 - Optional OBJ, GLB or image reference scoring.
 - macOS desktop application and shared-engine Windows packaging workflow.

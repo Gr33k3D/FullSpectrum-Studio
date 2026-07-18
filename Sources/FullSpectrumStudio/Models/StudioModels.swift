@@ -42,7 +42,7 @@ enum PaletteSource: String, CaseIterable, Identifiable {
 
     var explanation: String {
         switch self {
-        case .inventory: return "Only choose colors listed in your Bambu Studio Beta inventory."
+        case .inventory: return "Only choose active colors from the most recently updated Bambu Studio inventory."
         case .catalog: return "Plan with supported PLA Basic, Matte and Silk+ colors for the selected planning region."
         case .allBambu: return "Core Bambu palette plus other active Bambu PLA types detected in your inventory."
         case .custom: return "Choose colors from a local JSON filament library."
@@ -110,7 +110,7 @@ enum PlannerMode: String, CaseIterable, Identifiable {
     var explanation: String {
         switch self {
         case .best:
-            return "Deep search with wider anchor beams, swap refinement, and dense 2/3-color Bambu mix ratios. Can take minutes on complex files."
+            return "Deep search with wider anchor beams, swap refinement, and dense 2/3-color Bambu mix ratios. Reuses cached model analysis."
         case .fast:
             return "Uses the previous quicker anchor planner and smaller ratio set for fast previews or troubleshooting."
         }
@@ -185,6 +185,7 @@ enum ViewerPerformance: String, CaseIterable, Identifiable {
 
 struct InventorySnapshot: Decodable {
     let source: String?
+    let sourceProfile: String?
     let allCount: Int
     let usableCount: Int
     let totalGrams: Double
@@ -250,6 +251,7 @@ struct ProjectInspection: Decodable {
     let sourceColors: [String]
     let thumbnail: String?
     let previewMesh: String?
+    let previewCache: String?
     let previewNotice: String?
     let metrics: MeshMetrics?
     let `import`: ImportSummary?
@@ -281,6 +283,7 @@ struct ConversionResult: Decodable {
     let catalogSource: String?
     let materialFamilies: [String]?
     let pinnedAnchorKeys: [String]?
+    let allowedAnchorKeys: [String]?
     let sourceSlots: Int
     let realSlots: Int
     let outputSlots: Int
@@ -321,6 +324,7 @@ struct PlanPreviewResult: Decodable {
     let catalogSource: String?
     let materialFamilies: [String]?
     let pinnedAnchorKeys: [String]?
+    let allowedAnchorKeys: [String]?
     let sourceSlots: Int
     let realSlots: Int
     let outputSlots: Int

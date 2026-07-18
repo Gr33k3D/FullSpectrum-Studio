@@ -10,9 +10,9 @@ The source project is never modified.
 This is an independent community release built around the H2C public-beta
 workflow and is not affiliated with Bambu Lab.
 
-Latest public package: [v0.5.0 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.5.0).
-See the [v0.5.0 release notes](docs/RELEASE_NOTES_0.5.0.md) for automatic live
-forecasting, inventory guidance and the redesigned macOS and Windows apps.
+Latest public package: [v0.5.1 Official Release](https://github.com/Gr33k3D/FullSpectrum-Studio/releases/tag/v0.5.1).
+See the [v0.5.1 release notes](docs/RELEASE_NOTES_0.5.1.md) for the inventory
+fix, selectable filament colors and large-model planning speedup.
 
 ## What It Does
 
@@ -37,8 +37,11 @@ forecasting, inventory guidance and the redesigned macOS and Windows apps.
 - Explains when My Inventory is missing a substantially better catalog color,
   and offers to use and pin that suggestion instead of silently presenting a
   surprising nearest available match.
-- Supports local Bambu Studio Beta inventory in read-only mode, Bambu PLA
-  planning palettes, CMYKW workflows and custom local filament libraries.
+- Shows available filament colors before planning, including remaining grams
+  for owned colors, and lets each color be enabled, disabled or pinned.
+- Supports the most recently updated local Bambu Studio inventory in read-only
+  mode, Bambu PLA planning palettes, CMYKW workflows and custom local filament
+  libraries.
 - Accepts an optional `.obj`, `.glb` or texture image as a visual reference and
   reports estimated similarity, brightness, contrast and confidence.
 - Imports constrained textured `.obj` and embedded-texture `.glb` sources
@@ -103,8 +106,8 @@ uncompressed archive sizes.
 ### My Inventory
 
 Recommended for practical printing. Uses active PLA spools detected in the
-local Bambu Studio Beta inventory and estimates available mixing capacity from
-remaining material.
+most recently updated local Bambu Studio inventory and estimates available
+mixing capacity from remaining material.
 
 ### Bambu Core
 
@@ -334,6 +337,7 @@ python3 tools/benchmark_quality.py --reference original.glb painted-project.3mf
 - [Third-Party Notices](THIRD_PARTY_NOTICES.md)
 - [Security And Privacy](docs/SECURITY_PRIVACY.md)
 - [0.4 Release Notes](docs/RELEASE_NOTES_0.4.md)
+- [0.5.1 Release Notes](docs/RELEASE_NOTES_0.5.1.md)
 - [0.5.0 Release Notes](docs/RELEASE_NOTES_0.5.0.md)
 - [0.4.16 Release Notes](docs/RELEASE_NOTES_0.4.16.md)
 - [0.4.15 Release Notes](docs/RELEASE_NOTES_0.4.15.md)

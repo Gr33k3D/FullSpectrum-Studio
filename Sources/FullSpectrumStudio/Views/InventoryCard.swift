@@ -6,7 +6,7 @@ struct InventoryCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack {
-                Text("BAMBU INVENTORY BETA")
+                Text("FILAMENT INVENTORY")
                     .font(.caption.weight(.bold))
                     .tracking(1.2)
                     .foregroundStyle(.white.opacity(0.5))
@@ -36,6 +36,12 @@ struct InventoryCard: View {
                         label: "Available material"
                     )
                     Spacer()
+                }
+
+                if let source = inventory.source {
+                    Label(source, systemImage: "externaldrive.connected.to.line.below")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.cyan.opacity(0.72))
                 }
 
                 if let catalog = inventory.catalog {
@@ -91,7 +97,7 @@ struct InventoryCard: View {
             } else {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Reading Bambu Studio Beta inventory...")
+                    Text("Reading the latest Bambu Studio inventory...")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.55))
                 }

@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import struct
 import sys
@@ -8,6 +9,7 @@ import unittest
 import zipfile
 import zlib
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -268,6 +270,49 @@ class ErrorReportingTests(unittest.TestCase):
 
 
 class ConversionTests(unittest.TestCase):
+    def test_inventory_uses_most_recent_bambu_studio_profile(self):
+        with tempfile.TemporaryDirectory() as folder_name:
+            folder = Path(folder_name)
+            beta = folder / "BambuStudioBeta" / "spools.json"
+            stable = folder / "BambuStudio" / "spools.json"
+            beta.parent.mkdir(parents=True)
+            stable.parent.mkdir(parents=True)
+
+            def inventory_payload(colors):
+                return {
+                    "spools": [
+                        {
+                            "material_type": "PLA",
+                            "status": "active",
+                            "net_weight": 500,
+                            "initial_weight": 1000,
+                            "series": "PLA Basic",
+                            "color_name": name,
+                            "color_code": color,
+                        }
+                        for name, color in colors
+                    ]
+                }
+
+            beta.write_text(json.dumps(inventory_payload([
+                ("Red", "#FF0000"), ("Blue", "#0000FF")
+            ])))
+            stable.write_text(json.dumps(inventory_payload([
+                ("Black", "#000000"), ("White", "#FFFFFF")
+            ])))
+            os.utime(beta, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(stable, ns=(2_000_000_000, 2_000_000_000))
+
+            locations = [
+                ("Bambu Studio Beta", beta),
+                ("Bambu Studio", stable),
+            ]
+            with mock.patch.object(ENGINE, "BAMBU_INVENTORY_LOCATIONS", locations):
+                inventory = ENGINE.read_bambu_inventory(minimum_colors=2)
+
+            self.assertEqual(inventory["sourceProfile"], "Bambu Studio")
+            self.assertEqual({spool["color"] for spool in inventory["spools"]}, {"#000000", "#FFFFFF"})
+
     def test_binary_paint_remap_preserves_nonpaint_model_bytes(self):
         with tempfile.TemporaryDirectory() as folder_name:
             folder = Path(folder_name)
@@ -447,6 +492,44 @@ class ConversionTests(unittest.TestCase):
             self.assertTrue(Path(output["analysisAssets"]["heatmapMesh"]).exists())
             self.assertTrue(Path(output["analysisAssets"]["anchorInfluenceMesh"]).exists())
             self.assertEqual(list(Path(folder).glob("*FullSpectrum*.3mf")), [])
+
+    def test_plan_preview_skips_extraction_and_preservation_hashing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            write_project(source)
+            with mock.patch.object(
+                ENGINE, "safe_extract_archive", side_effect=AssertionError("plan extracted archive")
+            ), mock.patch.object(
+                ENGINE, "preservation_snapshot", side_effect=AssertionError("plan hashed archive")
+            ):
+                output = ENGINE.convert(
+                    source, "official", "catalog", folder, False, "2",
+                    planner_mode="fast", plan_only=True,
+                )
+            self.assertEqual(output["type"], "planPreview")
+
+    def test_plan_preview_reuses_inspection_mesh_cache(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.3mf"
+            mesh = Path(folder) / "source-preview.obj"
+            analysis = Path(folder) / "analysis"
+            write_project(source)
+            inspected = ENGINE.inspect_project(source, preview_mesh_dest=mesh)
+            self.assertTrue(Path(inspected["previewCache"]).exists())
+
+            with mock.patch.object(
+                ENGINE, "reduced_preview_geometry", side_effect=AssertionError("preview reparsed")
+            ):
+                output = ENGINE.convert(
+                    source, "official", "catalog", folder, False, "2",
+                    planner_mode="fast", planning_sample="preview", plan_only=True,
+                    analysis_dir=analysis, preview_cache=inspected["previewCache"],
+                )
+
+            predicted = Path(output["analysisAssets"]["predictedMesh"])
+            self.assertTrue(predicted.exists())
+            self.assertIn("usemtl slot_2", predicted.read_text())
+            self.assertIn("newmtl slot_2", predicted.with_suffix(".mtl").read_text())
 
     def test_metadata_only_inspection_avoids_mesh_scan_and_preview_build(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -892,6 +975,20 @@ class ConversionTests(unittest.TestCase):
         )
         self.assertEqual(ENGINE.anchor_key(anchors[0]), "PLA Basic|#000000")
         self.assertTrue(all(anchor["series"] == "PLA Basic" for anchor in anchors))
+
+        restricted = ENGINE.select_anchors(
+            ["#111111", "#F7F7F7", "#D32941"],
+            {1: 80, 2: 40, 3: 20},
+            "official",
+            inventory,
+            "inventory",
+            "2",
+            allowed_anchor_keys=["PLA Basic|#000000", "PLA Basic|#FFFFFF"],
+        )
+        self.assertEqual(
+            {ENGINE.anchor_key(anchor) for anchor in restricted},
+            {"PLA Basic|#000000", "PLA Basic|#FFFFFF"},
+        )
 
     def test_textured_obj_import_runs_through_validated_output(self):
         with tempfile.TemporaryDirectory() as folder_name:

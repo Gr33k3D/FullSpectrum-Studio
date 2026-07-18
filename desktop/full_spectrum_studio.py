@@ -82,7 +82,12 @@ class StudioApp(tk.Tk):
         self.auto_preview_after = None
         self.source_preview_photo = None
         self.last_plan_result = None
+        self.inventory_snapshot = None
+        self.disabled_anchor_keys = set()
+        self.pinned_anchor_keys = set()
+        self.filament_selection_summary = tk.StringVar(value="Loading filament colors...")
         self._build()
+        threading.Thread(target=self._refresh_inventory, daemon=True).start()
 
     def _build(self):
         style = ttk.Style(self)
@@ -151,6 +156,16 @@ class StudioApp(tk.Tk):
         self.combo(choices, "Physical slots", self.real_slots, ["auto", "2", "3", "4", "5", "6", "7", "8"], 0, 1)
         self.combo(choices, "Catalog region", self.catalog_region, ["global", "eu", "us-ca", "uk", "au-nz", "asia"], 1, 1)
         self.combo(choices, "Planning sample", self.planning_sample, ["paint", "preview"], 2, 1)
+
+        filament_row = ttk.Frame(frame)
+        filament_row.pack(fill="x", pady=(2, 10))
+        self.filament_button = ttk.Button(
+            filament_row, text="Choose Filament Colors", command=self.open_filament_selector
+        )
+        self.filament_button.pack(side="left")
+        ttk.Label(
+            filament_row, textvariable=self.filament_selection_summary, style="Small.TLabel"
+        ).pack(side="left", padx=(10, 0), fill="x", expand=True)
 
         handoff = ttk.Frame(frame)
         handoff.pack(fill="x", pady=(8, 12))
@@ -240,11 +255,203 @@ class StudioApp(tk.Tk):
         for variable in watched:
             variable.trace_add("write", self.schedule_auto_preview)
         self.auto_preview.trace_add("write", self.schedule_auto_preview)
+        self.source.trace_add("write", self._update_filament_selection_summary)
 
     def combo(self, parent, title, variable, values, column, row=0):
         parent.columnconfigure(column, weight=1)
         ttk.Label(parent, text=title).grid(row=row * 2, column=column, sticky="w", padx=(0, 20), pady=(0, 2))
         ttk.Combobox(parent, textvariable=variable, values=values, state="readonly", width=13).grid(row=row * 2 + 1, column=column, sticky="ew", padx=(0, 12), pady=(0, 8))
+
+    def _refresh_inventory(self):
+        try:
+            snapshot = ENGINE.read_bambu_inventory(required=False, minimum_colors=0)
+        except Exception:
+            snapshot = None
+        self.after(0, lambda: self._finish_inventory_refresh(snapshot))
+
+    def _finish_inventory_refresh(self, snapshot):
+        self.inventory_snapshot = snapshot
+        self._update_filament_selection_summary()
+
+    def _filament_options(self):
+        snapshot = self.inventory_snapshot
+        source = self.source.get()
+        if not snapshot or source not in ("inventory", "catalog", "all-bambu"):
+            return []
+        if source == "inventory":
+            raw = [
+                ENGINE.anchor_option_payload(item)
+                for item in ENGINE.inventory_palette(snapshot)
+            ]
+        else:
+            raw = list(snapshot.get("anchorOptions") or [])
+            if source == "catalog":
+                core = {"PLA Basic", "PLA Matte", "PLA Silk+"}
+                raw = [item for item in raw if item.get("series") in core]
+        unique = {}
+        for option in raw:
+            key = option.get("key")
+            if key and key not in unique:
+                unique[key] = option
+        return sorted(
+            unique.values(),
+            key=lambda item: (
+                item.get("remainingGrams") is None,
+                str(item.get("series") or ""),
+                str(item.get("name") or ""),
+            ),
+        )
+
+    def _update_filament_selection_summary(self, *_):
+        source = self.source.get()
+        if source not in ("inventory", "catalog", "all-bambu"):
+            self.filament_selection_summary.set("Automatic for this filament source")
+            return
+        if self.inventory_snapshot is None:
+            self.filament_selection_summary.set("Loading filament colors...")
+            return
+        options = self._filament_options()
+        option_keys = {item["key"] for item in options}
+        self.disabled_anchor_keys.intersection_update(option_keys)
+        self.pinned_anchor_keys.intersection_update(option_keys)
+        enabled = len(option_keys - self.disabled_anchor_keys)
+        pins = len(self.pinned_anchor_keys)
+        self.filament_selection_summary.set(
+            f"{enabled} of {len(options)} enabled" + (f" | {pins} pinned" if pins else "")
+        )
+
+    def open_filament_selector(self):
+        options = self._filament_options()
+        if not options:
+            if self.inventory_snapshot is None:
+                messagebox.showinfo("Filament colors", "The Bambu Studio filament inventory is still loading.")
+            else:
+                messagebox.showinfo(
+                    "Filament colors",
+                    "Choose My Inventory, Bambu Core, or All Bambu to select individual colors.",
+                )
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Filament Colors")
+        dialog.geometry("650x650")
+        dialog.minsize(520, 470)
+        dialog.configure(bg="#151719")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        shell = ttk.Frame(dialog, padding=16)
+        shell.pack(fill="both", expand=True)
+        ttk.Label(shell, text="FILAMENT COLORS", style="Section.TLabel").pack(anchor="w")
+        ttk.Label(
+            shell,
+            text="Enable colors the planner may use. Pin only colors that must occupy a physical slot.",
+            style="Small.TLabel",
+            wraplength=590,
+            justify="left",
+        ).pack(anchor="w", pady=(5, 12))
+
+        toolbar = ttk.Frame(shell)
+        toolbar.pack(fill="x", pady=(0, 9))
+        search = tk.StringVar()
+        ttk.Entry(toolbar, textvariable=search).pack(side="left", fill="x", expand=True)
+        selected = {
+            item["key"]: tk.BooleanVar(value=item["key"] not in self.disabled_anchor_keys)
+            for item in options
+        }
+        pinned = {
+            item["key"]: tk.BooleanVar(value=item["key"] in self.pinned_anchor_keys)
+            for item in options
+        }
+
+        canvas = tk.Canvas(shell, bg="#151719", highlightthickness=1, highlightbackground="#30363a")
+        scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        rows = ttk.Frame(canvas, padding=(8, 6))
+        window = canvas.create_window((0, 0), window=rows, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        rows.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def toggle_pin(key):
+            if pinned[key].get():
+                selected[key].set(True)
+
+        def rebuild(*_):
+            for child in rows.winfo_children():
+                child.destroy()
+            query = search.get().strip().lower()
+            visible = [
+                item for item in options
+                if not query or query in str(item.get("name") or "").lower()
+                or query in str(item.get("series") or "").lower()
+                or query in str(item.get("color") or "").lower()
+            ]
+            for item in visible:
+                key = item["key"]
+                row = ttk.Frame(rows, padding=(2, 5))
+                row.pack(fill="x")
+                ttk.Checkbutton(row, variable=selected[key]).pack(side="left")
+                swatch = tk.Frame(row, width=22, height=22, bg=item.get("color") or "#777777")
+                swatch.pack(side="left", padx=(3, 9))
+                swatch.pack_propagate(False)
+                label = ttk.Frame(row)
+                label.pack(side="left", fill="x", expand=True)
+                ttk.Label(label, text=item.get("name") or key).pack(anchor="w")
+                grams = item.get("remainingGrams")
+                detail = (
+                    f"{item.get('series', '')} | {item.get('color', '')} | {grams:.0f} g remaining"
+                    if grams is not None else
+                    f"{item.get('series', '')} | {item.get('color', '')} | catalog color"
+                )
+                ttk.Label(label, text=detail, style="Small.TLabel").pack(anchor="w")
+                ttk.Checkbutton(
+                    row, text="Pin", variable=pinned[key], command=lambda value=key: toggle_pin(value)
+                ).pack(side="right", padx=(8, 2))
+            if not visible:
+                ttk.Label(rows, text="No matching filament colors.", style="Small.TLabel").pack(pady=24)
+
+        search.trace_add("write", rebuild)
+        rebuild()
+
+        footer = ttk.Frame(dialog, padding=(16, 0, 16, 16))
+        footer.pack(fill="x")
+
+        def select_all():
+            for value in selected.values():
+                value.set(True)
+
+        def clear_pins():
+            for value in pinned.values():
+                value.set(False)
+
+        def apply_selection():
+            enabled = {key for key, value in selected.items() if value.get()}
+            colors = {item.get("color") for item in options if item["key"] in enabled}
+            if len(colors) < 2:
+                messagebox.showerror("Filament colors", "Enable at least two distinct filament colors.", parent=dialog)
+                return
+            selected_pins = {key for key, value in pinned.items() if value.get()} & enabled
+            maximum = int(self.real_slots.get()) if self.real_slots.get().isdigit() else 6
+            if len(selected_pins) > maximum:
+                messagebox.showerror(
+                    "Filament colors",
+                    f"This plan allows at most {maximum} pinned physical colors.",
+                    parent=dialog,
+                )
+                return
+            all_keys = {item["key"] for item in options}
+            self.disabled_anchor_keys = all_keys - enabled
+            self.pinned_anchor_keys = selected_pins
+            self._update_filament_selection_summary()
+            dialog.destroy()
+            self.schedule_auto_preview()
+
+        ttk.Button(footer, text="All", command=select_all).pack(side="left")
+        ttk.Button(footer, text="Clear Pins", command=clear_pins).pack(side="left", padx=(8, 0))
+        ttk.Button(footer, text="Cancel", command=dialog.destroy).pack(side="right")
+        ttk.Button(footer, text="Apply", command=apply_selection, style="Accent.TButton").pack(side="right", padx=(0, 8))
 
     def schedule_auto_preview(self, *_):
         self.settings_revision += 1
@@ -327,6 +534,11 @@ class StudioApp(tk.Tk):
             self.source.set("all-bambu")
         else:
             self.planner_mode.set("best")
+        key = suggestion.get("key")
+        if key:
+            self.disabled_anchor_keys.discard(key)
+            self.pinned_anchor_keys.add(key)
+            self._update_filament_selection_summary()
         self.schedule_auto_preview()
 
     def load_source_thumbnail(self, path):
@@ -446,6 +658,9 @@ class StudioApp(tk.Tk):
         self.record_progress(0, "Updating live forecast." if automatic else ("Starting plan preview." if plan_only else "Starting conversion."))
         self.start_heartbeat()
         operation_revision = self.settings_revision if operation_revision is None else operation_revision
+        filament_options = self._filament_options()
+        option_keys = {item["key"] for item in filament_options}
+        disabled_keys = self.disabled_anchor_keys & option_keys
         options = {
             "strategy": self.strategy.get(),
             "source": self.source.get(),
@@ -460,6 +675,8 @@ class StudioApp(tk.Tk):
             "custom": self.custom.get() or None,
             "auto_open": self.auto_open.get(),
             "output_application": self.output_application.get(),
+            "allowed_anchor_keys": sorted(option_keys - disabled_keys) if disabled_keys else None,
+            "pinned_anchor_keys": sorted(self.pinned_anchor_keys & option_keys),
         }
         threading.Thread(
             target=self._run_operation,
@@ -491,6 +708,8 @@ class StudioApp(tk.Tk):
                 planning_sample=options["planning_sample"],
                 mix_model=options["mix_model"],
                 plan_only=plan_only,
+                allowed_anchor_keys=options["allowed_anchor_keys"],
+                pinned_anchor_keys=options["pinned_anchor_keys"],
                 progress=report,
             )
             if plan_only:
@@ -522,6 +741,8 @@ class StudioApp(tk.Tk):
 
     def finish(self, result, text):
         self.worker_active = False
+        self.inventory_snapshot = result.get("inventory") or self.inventory_snapshot
+        self._update_filament_selection_summary()
         self.preview_button.configure(state="normal")
         self.output.delete("1.0", "end")
         self.output.insert("1.0", text)

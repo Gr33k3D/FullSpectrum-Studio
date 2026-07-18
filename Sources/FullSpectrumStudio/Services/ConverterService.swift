@@ -121,6 +121,8 @@ struct ConverterService {
         planningSample: PlanningSample,
         materialFamilies: [String],
         pinnedAnchorKeys: [String],
+        allowedAnchorKeys: [String],
+        previewCache: URL?,
         mixPrediction: MixPrediction,
         outputDirectory: URL,
         progress: @escaping @Sendable (Double, String) -> Void
@@ -157,6 +159,12 @@ struct ConverterService {
         if !pinnedAnchorKeys.isEmpty {
             arguments.insert(contentsOf: ["--anchors", pinnedAnchorKeys.joined(separator: ",")], at: arguments.count - 1)
         }
+        if !allowedAnchorKeys.isEmpty {
+            arguments.insert(contentsOf: ["--allowed-anchors", allowedAnchorKeys.joined(separator: ",")], at: arguments.count - 1)
+        }
+        if let previewCache {
+            arguments.insert(contentsOf: ["--preview-cache", previewCache.path], at: arguments.count - 1)
+        }
         return try await execute(
             arguments: arguments,
             type: ConversionResult.self,
@@ -178,6 +186,8 @@ struct ConverterService {
         planningSample: PlanningSample,
         materialFamilies: [String],
         pinnedAnchorKeys: [String],
+        allowedAnchorKeys: [String],
+        previewCache: URL?,
         mixPrediction: MixPrediction,
         outputDirectory: URL,
         progress: @escaping @Sendable (Double, String) -> Void
@@ -214,6 +224,12 @@ struct ConverterService {
         }
         if !pinnedAnchorKeys.isEmpty {
             arguments.insert(contentsOf: ["--anchors", pinnedAnchorKeys.joined(separator: ",")], at: arguments.count - 1)
+        }
+        if !allowedAnchorKeys.isEmpty {
+            arguments.insert(contentsOf: ["--allowed-anchors", allowedAnchorKeys.joined(separator: ",")], at: arguments.count - 1)
+        }
+        if let previewCache {
+            arguments.insert(contentsOf: ["--preview-cache", previewCache.path], at: arguments.count - 1)
         }
         do {
             return try await execute(

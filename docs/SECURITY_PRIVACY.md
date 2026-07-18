@@ -5,7 +5,8 @@ projects, references or Bambu inventory.
 
 ## Inventory
 
-Inventory mode reads the local Bambu Studio Beta `spools.json` file in
+Inventory mode reads the most recently updated local Bambu Studio or Bambu
+Studio Beta `spools.json` file in
 read-only mode. Only display-safe color, material and quantity fields are used
 inside the local app. Device bindings, tag IDs, spool IDs, quantities and
 local paths are not written to generated shareable text reports.

@@ -13,7 +13,7 @@ def release_version():
     try:
         return (APP_ROOT / "VERSION").read_text(encoding="utf-8").strip()
     except OSError:
-        return "0.5.0"
+        return "0.5.1"
 
 
 APP_VERSION = release_version()

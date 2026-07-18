@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ConversionControlsCard: View {
     @EnvironmentObject private var store: StudioStore
-    @State private var anchorToolsExpanded = false
+    @State private var anchorToolsExpanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -134,7 +134,7 @@ struct ConversionControlsCard: View {
 
                         VStack(alignment: .leading, spacing: 7) {
                             HStack {
-                                Text("Anchor pins")
+                                Text("Filament colors")
                                     .font(.caption2.weight(.bold))
                                     .foregroundStyle(.white.opacity(0.46))
                                 Spacer()
@@ -146,40 +146,73 @@ struct ConversionControlsCard: View {
                                     .buttonStyle(.plain)
                                     .foregroundStyle(.cyan)
                                 }
-                                if !store.pinnedAnchorKeys.isEmpty {
-                                    Button("Clear") {
-                                        store.clearAnchorPins()
+                                if store.restrictFilamentColors {
+                                    Button("Use all") {
+                                        store.enableAllFilamentColors()
                                     }
                                     .font(.caption2.weight(.medium))
                                     .buttonStyle(.plain)
                                     .foregroundStyle(.white.opacity(0.55))
                                 }
                             }
-                            Text(store.pinnedAnchorSummary)
-                                .font(.caption2)
-                                .foregroundStyle(.cyan.opacity(0.68))
-                            TextField("Search Bambu anchor colors", text: $store.anchorSearch)
+
+                            Toggle(
+                                "Choose which colors the planner may use",
+                                isOn: Binding(
+                                    get: { store.restrictFilamentColors },
+                                    set: { store.setFilamentColorRestriction($0) }
+                                )
+                            )
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.white.opacity(0.68))
+
+                            HStack(spacing: 7) {
+                                Text(store.filamentSelectionSummary)
+                                if !store.pinnedAnchorKeys.isEmpty {
+                                    Text("•")
+                                    Text(store.pinnedAnchorSummary)
+                                }
+                            }
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.cyan.opacity(0.72))
+
+                            HStack(spacing: 4) {
+                                ForEach(Array(store.anchorCandidateOptions.prefix(20))) { candidate in
+                                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                        .fill(Color(hex: candidate.color))
+                                        .frame(maxWidth: .infinity, minHeight: 12, maxHeight: 12)
+                                        .opacity(
+                                            !store.restrictFilamentColors || store.allowedAnchorKeys.contains(candidate.key)
+                                            ? 1 : 0.2
+                                        )
+                                }
+                            }
+
+                            TextField("Search filament names or hex colors", text: $store.anchorSearch)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.caption)
                             ScrollView {
                                 VStack(spacing: 5) {
-                                    ForEach(Array(store.anchorCandidateOptions.prefix(48))) { candidate in
-                                        AnchorCandidateButton(
+                                    ForEach(Array(store.anchorCandidateOptions.prefix(64))) { candidate in
+                                        FilamentCandidateRow(
                                             candidate: candidate,
-                                            isPinned: store.pinnedAnchorKeys.contains(candidate.key)
-                                        ) {
-                                            store.toggleAnchorPin(candidate)
-                                        }
+                                            isEnabled: !store.restrictFilamentColors || store.allowedAnchorKeys.contains(candidate.key),
+                                            isPinned: store.pinnedAnchorKeys.contains(candidate.key),
+                                            toggleEnabled: { store.toggleFilamentAvailability(candidate) },
+                                            togglePin: { store.toggleAnchorPin(candidate) }
+                                        )
                                     }
                                 }
                             }
-                            .frame(maxHeight: 178)
-                            if store.anchorCandidateOptions.count > 48 {
-                                Text("Showing 48 of \(store.anchorCandidateOptions.count). Search or narrow material types.")
+                            .frame(maxHeight: 230)
+                            if store.anchorCandidateOptions.count > 64 {
+                                Text("Showing 64 of \(store.anchorCandidateOptions.count). Search or narrow material types.")
                                     .font(.caption2)
                                     .foregroundStyle(.white.opacity(0.42))
                             }
-                            Text("Pinned anchors are forced into the plan; FullSpectrum fills the remaining slots with the best Bambu filaments.")
+                            Text("The checkbox allows a color; the pin forces it into a physical slot. Owned colors show total remaining grams.")
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.44))
                                 .fixedSize(horizontal: false, vertical: true)
@@ -188,9 +221,9 @@ struct ConversionControlsCard: View {
                     .padding(.top, 7)
                 } label: {
                     HStack {
-                        Label("Bambu materials and anchors", systemImage: "scope")
+                        Label("Filament colors and anchors", systemImage: "paintpalette")
                         Spacer()
-                        Text(store.activeMaterialFamilies.isEmpty ? store.pinnedAnchorSummary : "\(store.activeMaterialFamilies.count) type\(store.activeMaterialFamilies.count == 1 ? "" : "s") · \(store.pinnedAnchorSummary)")
+                        Text("\(store.enabledFilamentCount) enabled · \(store.pinnedAnchorKeys.count) pinned")
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.white.opacity(0.5))
                     }
@@ -695,38 +728,55 @@ private struct WorstMatchNotice: View {
     }
 }
 
-private struct AnchorCandidateButton: View {
+private struct FilamentCandidateRow: View {
     let candidate: AnchorCandidate
+    let isEnabled: Bool
     let isPinned: Bool
-    let action: () -> Void
+    let toggleEnabled: () -> Void
+    let togglePin: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(Color(hex: candidate.color))
-                    .frame(width: 16, height: 16)
-                    .overlay { Circle().stroke(.white.opacity(0.18), lineWidth: 1) }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(candidate.name)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.82))
-                        .lineLimit(1)
-                    Text(anchorDetail)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.42))
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 6)
-                Image(systemName: isPinned ? "checkmark.circle.fill" : "plus.circle")
-                    .foregroundStyle(isPinned ? .cyan : .white.opacity(0.38))
+        HStack(spacing: 8) {
+            Button(action: toggleEnabled) {
+                Image(systemName: isEnabled ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(isEnabled ? .cyan : .white.opacity(0.38))
                     .imageScale(.small)
             }
-            .padding(.horizontal, 7)
-            .frame(minHeight: 34)
-            .background(.white.opacity(isPinned ? 0.10 : 0.04), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .buttonStyle(.plain)
+            .help(isEnabled ? "Exclude this filament color" : "Allow this filament color")
+
+            Circle()
+                .fill(Color(hex: candidate.color))
+                .frame(width: 17, height: 17)
+                .overlay { Circle().stroke(.white.opacity(0.18), lineWidth: 1) }
+                .opacity(isEnabled ? 1 : 0.3)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(candidate.name)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.white.opacity(isEnabled ? 0.82 : 0.4))
+                    .lineLimit(1)
+                Text(anchorDetail)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(isEnabled ? 0.46 : 0.26))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            Button(action: togglePin) {
+                Image(systemName: isPinned ? "pin.fill" : "pin")
+                    .foregroundStyle(isPinned ? .cyan : .white.opacity(0.38))
+                    .imageScale(.small)
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .help(isPinned ? "Let the planner choose this anchor automatically" : "Force this filament into a physical slot")
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 7)
+        .frame(minHeight: 36)
+        .background(
+            .white.opacity(isPinned ? 0.10 : (isEnabled ? 0.04 : 0.018)),
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+        )
     }
 
     private var anchorDetail: String {

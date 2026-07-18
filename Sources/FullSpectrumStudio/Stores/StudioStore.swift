@@ -19,6 +19,8 @@ final class StudioStore: ObservableObject {
     @Published var planningSample: PlanningSample = .preview
     @Published var selectedMaterialFamilies: Set<String> = []
     @Published var pinnedAnchorKeys: Set<String> = []
+    @Published var restrictFilamentColors = false
+    @Published var allowedAnchorKeys: Set<String> = []
     @Published var anchorSearch = ""
     @Published var mixPrediction: MixPrediction = .bambu
     @Published var qualityBias = 60.0
@@ -32,6 +34,7 @@ final class StudioStore: ObservableObject {
     @Published var inventory: InventorySnapshot?
     @Published var previewImage: NSImage?
     @Published var previewMeshURL: URL?
+    @Published var previewCacheURL: URL?
     @Published var outputPreviewMeshURL: URL?
     @Published var heatmapMeshURL: URL?
     @Published var anchorInfluenceMeshURL: URL?
@@ -171,9 +174,6 @@ final class StudioStore: ObservableObject {
             || $0.color.localizedCaseInsensitiveContains(query)
         }
         return searched.sorted { lhs, rhs in
-            if pinnedAnchorKeys.contains(lhs.key) != pinnedAnchorKeys.contains(rhs.key) {
-                return pinnedAnchorKeys.contains(lhs.key)
-            }
             if lhs.series != rhs.series { return lhs.series < rhs.series }
             return lhs.name < rhs.name
         }
@@ -184,19 +184,24 @@ final class StudioStore: ObservableObject {
         let base: [AnchorCandidate]
         switch paletteSource {
         case .inventory:
-            base = inventory.spools.map {
-                AnchorCandidate(
-                    key: "\($0.series)|\($0.color)",
-                    name: $0.name,
-                    series: $0.series,
-                    brand: $0.brand,
-                    color: $0.color,
-                    preset: $0.preset,
-                    filamentID: $0.filamentID,
-                    remainingGrams: $0.remainingGrams,
+            let grouped = Dictionary(grouping: inventory.spools) { "\($0.series)|\($0.color)" }
+            let aggregated = grouped.compactMap { key, spools -> AnchorCandidate? in
+                guard let first = spools.first else { return nil }
+                return AnchorCandidate(
+                    key: key,
+                    name: first.name,
+                    series: first.series,
+                    brand: first.brand,
+                    color: first.color,
+                    preset: first.preset,
+                    filamentID: first.filamentID,
+                    remainingGrams: spools.reduce(0) { $0 + $1.remainingGrams },
                     availability: "owned",
                     catalogSource: inventory.catalog?.source
                 )
+            }
+            base = Dictionary(grouping: aggregated, by: \.color).values.compactMap { options in
+                options.max { ($0.remainingGrams ?? 0) < ($1.remainingGrams ?? 0) }
             }
         case .catalog, .allBambu:
             let core = Set(["PLA Basic", "PLA Matte", "PLA Silk+"])
@@ -208,6 +213,21 @@ final class StudioStore: ObservableObject {
         }
         let families = Set(activeMaterialFamilies)
         return families.isEmpty ? base : base.filter { families.contains($0.series) }
+    }
+
+    var enabledFilamentCount: Int {
+        restrictFilamentColors ? activeAllowedAnchorKeys.count : availableAnchorCandidates.count
+    }
+
+    var filamentSelectionSummary: String {
+        guard restrictFilamentColors else { return "All \(availableAnchorCandidates.count) colors enabled" }
+        return "\(activeAllowedAnchorKeys.count) of \(availableAnchorCandidates.count) colors enabled"
+    }
+
+    var activeAllowedAnchorKeys: [String] {
+        guard anchorSelectionEnabled, restrictFilamentColors else { return [] }
+        let available = Set(availableAnchorCandidates.map(\.key))
+        return allowedAnchorKeys.filter { available.contains($0) }.sorted()
     }
 
     var pinnedAnchorSummary: String {
@@ -350,6 +370,7 @@ final class StudioStore: ObservableObject {
         planPreview = nil
         previewImage = nil
         previewMeshURL = nil
+        previewCacheURL = nil
         outputPreviewMeshURL = nil
         heatmapMeshURL = nil
         anchorInfluenceMeshURL = nil
@@ -469,6 +490,7 @@ final class StudioStore: ObservableObject {
                 } else if !keepExistingMesh {
                     previewMeshURL = nil
                 }
+                previewCacheURL = project.previewCache.map(URL.init(fileURLWithPath:))
                 if let recommendation = project.metrics?.recommendedRenderMode,
                    let mode = ViewerPerformance(rawValue: recommendation) {
                     viewerPerformance = mode
@@ -527,6 +549,44 @@ final class StudioStore: ObservableObject {
         scheduleAutomaticPlanPreview()
     }
 
+    func setFilamentColorRestriction(_ enabled: Bool) {
+        restrictFilamentColors = enabled
+        if enabled && activeAllowedAnchorKeys.count < 2 {
+            allowedAnchorKeys = Set(availableAnchorCandidates.map(\.key))
+        }
+        plannerInputsChanged()
+    }
+
+    func toggleFilamentAvailability(_ candidate: AnchorCandidate) {
+        if !restrictFilamentColors {
+            restrictFilamentColors = true
+            allowedAnchorKeys = Set(availableAnchorCandidates.map(\.key))
+        }
+        if allowedAnchorKeys.contains(candidate.key) {
+            let remaining = allowedAnchorKeys.subtracting([candidate.key])
+            let distinctColors = Set(
+                availableAnchorCandidates
+                    .filter { remaining.contains($0.key) }
+                    .map(\.color)
+            )
+            guard distinctColors.count >= 2 else {
+                present(message: "Keep at least two distinct filament colors enabled for palette planning.")
+                return
+            }
+            allowedAnchorKeys.remove(candidate.key)
+            pinnedAnchorKeys.remove(candidate.key)
+        } else {
+            allowedAnchorKeys.insert(candidate.key)
+        }
+        plannerInputsChanged()
+    }
+
+    func enableAllFilamentColors() {
+        restrictFilamentColors = false
+        allowedAnchorKeys = Set(availableAnchorCandidates.map(\.key))
+        plannerInputsChanged()
+    }
+
     func toggleAnchorPin(_ candidate: AnchorCandidate) {
         if pinnedAnchorKeys.contains(candidate.key) {
             pinnedAnchorKeys.remove(candidate.key)
@@ -537,6 +597,9 @@ final class StudioStore: ObservableObject {
                 return
             }
             pinnedAnchorKeys.insert(candidate.key)
+            if restrictFilamentColors {
+                allowedAnchorKeys.insert(candidate.key)
+            }
         }
         invalidateGeneratedPlan()
         scheduleAutomaticPlanPreview()
@@ -553,6 +616,9 @@ final class StudioStore: ObservableObject {
         let keys = anchors.compactMap(\.key)
         guard !keys.isEmpty else { return }
         pinnedAnchorKeys = Set(keys)
+        if restrictFilamentColors {
+            allowedAnchorKeys.formUnion(keys)
+        }
         invalidateGeneratedPlan(statusMessage: "Pinned \(keys.count) recommended Bambu anchors. Preview or compose again to lock them in.")
         scheduleAutomaticPlanPreview()
     }
@@ -566,6 +632,9 @@ final class StudioStore: ObservableObject {
             let maximum = Int(realSlots.rawValue) ?? 6
             if pinnedAnchorKeys.count < maximum || pinnedAnchorKeys.contains(key) {
                 pinnedAnchorKeys.insert(key)
+                if restrictFilamentColors {
+                    allowedAnchorKeys.insert(key)
+                }
             }
         }
         plannerInputsChanged()
@@ -738,6 +807,8 @@ final class StudioStore: ObservableObject {
         let capturedPlanningSample = planningSample
         let capturedMaterialFamilies = activeMaterialFamilies
         let capturedPinnedAnchors = anchorSelectionEnabled ? pinnedAnchorKeys.sorted() : []
+        let capturedAllowedAnchors = activeAllowedAnchorKeys
+        let capturedPreviewCache = previewCacheURL
         let capturedSmartQuality = smartQuality
         let capturedQualityBias = Int(qualityBias)
         let capturedCatalogRegion = catalogRegion
@@ -760,6 +831,8 @@ final class StudioStore: ObservableObject {
                     planningSample: capturedPlanningSample,
                     materialFamilies: capturedMaterialFamilies,
                     pinnedAnchorKeys: capturedPinnedAnchors,
+                    allowedAnchorKeys: capturedAllowedAnchors,
+                    previewCache: capturedPreviewCache,
                     mixPrediction: capturedPrediction,
                     outputDirectory: file.deletingLastPathComponent(),
                     progress: { [weak self] value, message in
@@ -863,6 +936,8 @@ final class StudioStore: ObservableObject {
         let capturedPlanningSample = planningSample
         let capturedMaterialFamilies = activeMaterialFamilies
         let capturedPinnedAnchors = anchorSelectionEnabled ? pinnedAnchorKeys.sorted() : []
+        let capturedAllowedAnchors = activeAllowedAnchorKeys
+        let capturedPreviewCache = previewCacheURL
         let capturedSmartQuality = smartQuality
         let capturedQualityBias = Int(qualityBias)
         let capturedCatalogRegion = catalogRegion
@@ -885,6 +960,8 @@ final class StudioStore: ObservableObject {
                     planningSample: capturedPlanningSample,
                     materialFamilies: capturedMaterialFamilies,
                     pinnedAnchorKeys: capturedPinnedAnchors,
+                    allowedAnchorKeys: capturedAllowedAnchors,
+                    previewCache: capturedPreviewCache,
                     mixPrediction: capturedPrediction,
                     outputDirectory: file.deletingLastPathComponent(),
                     progress: { [weak self] value, message in
@@ -1266,12 +1343,12 @@ final class StudioStore: ObservableObject {
         var seconds: TimeInterval
         switch plannerMode {
         case .fast:
-            seconds = planOnly ? 18 : 38
+            seconds = planOnly ? 4 : 12
         case .best:
-            seconds = smartQuality ? (planOnly ? 95 : 170) : (planOnly ? 52 : 108)
+            seconds = smartQuality ? (planOnly ? 12 : 22) : (planOnly ? 8 : 18)
         }
         if planningSample == .preview {
-            seconds *= 1.2
+            seconds *= 1.05
         }
         switch paletteSource {
         case .allBambu:
@@ -1293,9 +1370,7 @@ final class StudioStore: ObservableObject {
             seconds *= 0.90
         }
         if let metrics = inspection?.metrics {
-            let baseline = planningSample == .preview ? 650_000.0 : 1_100_000.0
-            let ceiling = planningSample == .preview ? 4.0 : 2.2
-            let triangleScale = min(ceiling, max(0.65, Double(metrics.triangleCount) / baseline))
+            let triangleScale = min(1.35, max(0.78, 0.8 + Double(metrics.triangleCount) / 10_000_000.0))
             seconds *= triangleScale
         } else if selectedFile?.pathExtension.lowercased() == "obj" || selectedFile?.pathExtension.lowercased() == "glb" {
             seconds *= 2.0
@@ -1358,6 +1433,7 @@ final class StudioStore: ObservableObject {
         let slotBucket = realSlots == .auto ? "auto" : "manual-\(realSlots.rawValue)"
         let materialBucket = activeMaterialFamilies.isEmpty ? "all-materials" : activeMaterialFamilies.joined(separator: "+")
         let anchorBucket = pinnedAnchorKeys.isEmpty ? "auto-anchors" : "pins-\(pinnedAnchorKeys.sorted().joined(separator: "+"))"
+        let colorBucket = restrictFilamentColors ? "selected-\(activeAllowedAnchorKeys.count)" : "all-colors"
         return [
             kind,
             modelComplexityBucket(),
@@ -1368,7 +1444,8 @@ final class StudioStore: ObservableObject {
             paletteSource.rawValue,
             slotBucket,
             materialBucket,
-            anchorBucket
+            anchorBucket,
+            colorBucket
         ].joined(separator: "|")
     }
 
@@ -1381,7 +1458,8 @@ final class StudioStore: ObservableObject {
             planningSample.rawValue,
             smartQuality ? "smart" : "manual",
             activeMaterialFamilies.isEmpty ? "all-materials" : activeMaterialFamilies.joined(separator: "+"),
-            pinnedAnchorKeys.isEmpty ? "auto-anchors" : "manual-anchors"
+            pinnedAnchorKeys.isEmpty ? "auto-anchors" : "manual-anchors",
+            restrictFilamentColors ? "selected-colors" : "all-colors"
         ].joined(separator: "|")
     }
 
@@ -1390,10 +1468,16 @@ final class StudioStore: ObservableObject {
         selectedMaterialFamilies = selectedMaterialFamilies.filter { allowedFamilies.contains($0) }
         guard anchorSelectionEnabled else {
             pinnedAnchorKeys.removeAll()
+            allowedAnchorKeys.removeAll()
+            restrictFilamentColors = false
             return
         }
         let availableKeys = Set(availableAnchorCandidates.map(\.key))
         pinnedAnchorKeys = pinnedAnchorKeys.filter { availableKeys.contains($0) }
+        allowedAnchorKeys = allowedAnchorKeys.filter { availableKeys.contains($0) }
+        if restrictFilamentColors && allowedAnchorKeys.count < 2 {
+            allowedAnchorKeys = availableKeys
+        }
     }
 
     private func modelComplexityBucket() -> String {

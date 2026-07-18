@@ -10,7 +10,7 @@ MIN_SYSTEM_VERSION="14.0"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
 APP_VERSION="${FULLSPECTRUM_VERSION:-$PROJECT_VERSION}"
-APP_BUILD="${FULLSPECTRUM_BUILD:-17}"
+APP_BUILD="${FULLSPECTRUM_BUILD:-18}"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
@@ -18,6 +18,18 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$EXECUTABLE_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+
+# Some Command Line Tools updates leave the newest SDK briefly out of sync
+# with swiftc. The installed 15.4 SDK supports our macOS 14 deployment target
+# and remains compatible with current Swift compilers.
+COMPATIBLE_CLT_SDK="/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk"
+ACTIVE_DEVELOPER_DIR="$(/usr/bin/xcode-select -p 2>/dev/null || true)"
+if [[ -z "${SDKROOT:-}" && "$ACTIVE_DEVELOPER_DIR" == "/Library/Developer/CommandLineTools" && -d "$COMPATIBLE_CLT_SDK" ]]; then
+  export SDKROOT="$COMPATIBLE_CLT_SDK"
+fi
+export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$ROOT_DIR/.build/clang-module-cache}"
+export SWIFTPM_MODULECACHE_OVERRIDE="${SWIFTPM_MODULECACHE_OVERRIDE:-$ROOT_DIR/.build/swift-module-cache}"
+mkdir -p "$CLANG_MODULE_CACHE_PATH" "$SWIFTPM_MODULECACHE_OVERRIDE"
 
 pkill -x "$EXECUTABLE_NAME" >/dev/null 2>&1 || true
 
@@ -52,8 +64,8 @@ sign_bundle() {
 }
 
 cd "$ROOT_DIR"
-swift build -c release
-BIN_DIR="$(swift build -c release --show-bin-path)"
+swift build -c release --disable-sandbox
+BIN_DIR="$(swift build -c release --disable-sandbox --show-bin-path)"
 BUILD_BINARY="$BIN_DIR/$EXECUTABLE_NAME"
 
 rm -rf "$APP_BUNDLE"

@@ -120,6 +120,7 @@ MAX_REFERENCE_BYTES = 600 * 1024 * 1024
 MAX_IMPORT_FACES = 2_000_000
 MAX_INTERACTIVE_PREVIEW_TRIANGLES = 750_000
 OPTIMIZED_PREVIEW_GRID_RESOLUTION = 72
+PREVIEW_CACHE_VERSION = 1
 
 
 def release_version():
@@ -132,7 +133,7 @@ def release_version():
             return value
     except OSError:
         pass
-    return "0.4.15"
+    return "0.5.1"
 
 
 APP_VERSION = release_version()
@@ -171,6 +172,15 @@ PAINT_BYTES_VALUE_PATTERN = re.compile(br'(paint_color=)(["\'])([^"\']*)(\2)')
 XML_ATTRIBUTE_PATTERN = re.compile(r'([A-Za-z_:][\w:.-]*)="([^"]*)"')
 VERTEX_TAG_PATTERN = re.compile(r'<(?:[A-Za-z_][\w:.-]*:)?vertex\b[^>]*>')
 TRIANGLE_TAG_PATTERN = re.compile(r'<(?:[A-Za-z_][\w:.-]*:)?triangle\b[^>]*>')
+VERTEX_COORDINATES_BYTES_PATTERN = re.compile(
+    br'<(?:[A-Za-z_][\w:.-]*:)?vertex\b'
+    br'(?=[^>]*\bx="([^"]+)")(?=[^>]*\by="([^"]+)")(?=[^>]*\bz="([^"]+)")[^>]*>'
+)
+TRIANGLE_INDICES_BYTES_PATTERN = re.compile(
+    br'<(?:[A-Za-z_][\w:.-]*:)?triangle\b'
+    br'(?=[^>]*\bv1="(\d+)")(?=[^>]*\bv2="(\d+)")(?=[^>]*\bv3="(\d+)")[^>]*>'
+)
+PAINT_CODE_BYTES_PATTERN = re.compile(br'\bpaint_color="([^"]+)"')
 PROFILE_BY_FAMILY = {
     "PLA Basic": ("Bambu PLA Basic @base", "GFA00"),
     "PLA Matte": ("Bambu PLA Matte @base", "GFA01"),
@@ -291,10 +301,12 @@ def catalog_region_label(region):
         raise RuntimeError("Unknown catalog region. Choose one of: " + ", ".join(CATALOG_REGIONS))
     return CATALOG_REGIONS[key]
 
-def hx(c):
-    c=str(c).strip()
+@lru_cache(maxsize=65_536)
+def _normalized_hex(c):
     c=c if c.startswith("#") else "#"+c
     return c[:7].upper() if re.match(r"^#[0-9A-Fa-f]{6}", c) else c
+def hx(c):
+    return _normalized_hex(str(c).strip())
 def rgb(h):
     h=hx(h); return tuple(int(h[i:i+2],16) for i in (1,3,5))
 def tohex(r,g,b):
@@ -377,7 +389,10 @@ def cached_dist(a,b):
     return delta_e_2000(lab_for_hex(a), lab_for_hex(b))
 
 def dist(a,b):
-    return cached_dist(hx(a), hx(b))
+    first,second=hx(a),hx(b)
+    if first>second:
+        first,second=second,first
+    return cached_dist(first,second)
 def luminance(h):
     r,g,b=rgb(h); return .2126*r+.7152*g+.0722*b
 def serialized_ratio_text(ratios):
@@ -772,7 +787,14 @@ def official_filament_name(series, color):
 
 def read_bambu_inventory(required=True, minimum_colors=MIN_REAL_SLOTS):
     catalog_info=catalog_summary()
-    inventory_match=next(((label,path) for label,path in BAMBU_INVENTORY_LOCATIONS if path.exists()),None)
+    inventory_candidates=[]
+    for label,path in BAMBU_INVENTORY_LOCATIONS:
+        try:
+            modified=path.stat().st_mtime_ns
+        except OSError:
+            continue
+        inventory_candidates.append((modified,label=="Bambu Studio",label,path))
+    inventory_match=(max(inventory_candidates)[2:] if inventory_candidates else None)
     inventory_label,inventory_path=inventory_match if inventory_match else (None,None)
     if inventory_path is None:
         if required:
@@ -818,6 +840,7 @@ def read_bambu_inventory(required=True, minimum_colors=MIN_REAL_SLOTS):
         raise RuntimeError(f"Bambu Studio inventory needs at least {minimum_colors} distinct active PLA colors with remaining material.")
     return {
         "source":f"{inventory_label} local inventory",
+        "sourceProfile":inventory_label,
         "allCount":len(raw_spools),
         "usableCount":len(spools),
         "totalGrams":round(sum(item["remainingGrams"] for item in spools),1),
@@ -1475,7 +1498,7 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_mod
                       else import_glb_project(infile,staged,temporary,progress=progress))
             progress(0.60, "Generating source preview")
             result=inspect_project(staged,thumbnail_dest,preview_mesh_dest,mix_model)
-            result.update({"input":str(infile),"filename":infile.name,"import":imported})
+            result.update({"input":str(infile),"filename":infile.name,"import":imported,"previewCache":None})
             return result
         finally:
             shutil.rmtree(temporary,ignore_errors=True)
@@ -1504,20 +1527,35 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_mod
             preview.write_bytes(archive.read(preview_name))
         metrics=None if metadata_only else project_mesh_metrics(archive)
         preview_mesh=None
+        preview_cache=None
         preview_notice=None
         if preview_mesh_dest and metrics and metrics["triangleCount"] > MAX_INTERACTIVE_PREVIEW_TRIANGLES:
-            metrics["previewBuildEstimateSeconds"]=round(max(0.1,metrics["triangleCount"]/160000),1)
+            metrics["previewBuildEstimateSeconds"]=round(max(0.1,metrics["triangleCount"]/200000),1)
             progress(0.72,"Building optimized preview for large model")
-            preview_mesh=export_preview_mesh(
+            preview_mesh,preview_usage=export_preview_mesh(
                 archive,preview_colors_from_project(obj,mix_model),preview_mesh_dest,
                 grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION,
+                return_usage=True,
             )
+            if preview_mesh:
+                preview_cache=write_preview_cache(
+                    Path(preview_mesh_dest).with_suffix(".preview.json"),infile,len(colors),
+                    preview_mesh,preview_usage,OPTIMIZED_PREVIEW_GRID_RESOLUTION,
+                )
             preview_notice=(
                 "Using optimized preview for large models. "
                 "The full surface was reduced to an efficient display mesh."
             )
         elif preview_mesh_dest and not metadata_only:
-            preview_mesh=export_preview_mesh(archive, preview_colors_from_project(obj,mix_model), preview_mesh_dest)
+            preview_mesh,preview_usage=export_preview_mesh(
+                archive,preview_colors_from_project(obj,mix_model),preview_mesh_dest,
+                return_usage=True,
+            )
+            if preview_mesh:
+                preview_cache=write_preview_cache(
+                    Path(preview_mesh_dest).with_suffix(".preview.json"),infile,len(colors),
+                    preview_mesh,preview_usage,PREVIEW_GRID_RESOLUTION,
+                )
     return {
         "input":str(infile),
         "filename":infile.name,
@@ -1525,6 +1563,7 @@ def inspect_project(infile, thumbnail_dest=None, preview_mesh_dest=None, mix_mod
         "sourceColors":colors,
         "thumbnail":str(preview) if preview else None,
         "previewMesh":str(preview_mesh) if preview_mesh else None,
+        "previewCache":str(preview_cache) if preview_cache else None,
         "previewNotice":preview_notice,
         "metrics":metrics,
     }
@@ -1652,23 +1691,14 @@ def write_preview_materials(path, colors, material_prefix):
             red,green,blue=(channel/255.0 for channel in rgb(color))
             output.write(f"newmtl {material_prefix}_{slot}\nKd {red:.4f} {green:.4f} {blue:.4f}\nKa {red*.16:.4f} {green*.16:.4f} {blue*.16:.4f}\nNs 22\n\n")
 
-def export_preview_mesh(archive, colors, destination, material_prefix="slot",
-                        grid_resolution=PREVIEW_GRID_RESOLUTION):
-    """
-    Write a reduced, colored viewport mesh without altering print geometry.
-    Object XML can be hundreds of megabytes, so this reads line-oriented 3MF
-    vertex/triangle records and clusters nearby display vertices.
-    """
-    destination=Path(destination).expanduser()
-    destination.parent.mkdir(parents=True,exist_ok=True)
-    obj_path=destination.with_suffix(".obj")
-    mtl_path=obj_path.with_suffix(".mtl")
+def reduced_preview_geometry(archive, slot_count, grid_resolution=PREVIEW_GRID_RESOLUTION):
+    """Build one bounded display mesh and retain its visible source-slot usage."""
     model_names=sorted(
         name for name in archive.namelist()
         if name.lower().startswith("3d/objects/") and name.lower().endswith(".model")
     )
     if not model_names:
-        return None
+        return [],{}
 
     source_vertices=array("f")
     offsets={}
@@ -1678,21 +1708,22 @@ def export_preview_mesh(archive, colors, destination, material_prefix="slot",
         offsets[name]=len(source_vertices)//3
         with archive.open(name) as source:
             for raw_line in source:
-                if b"<vertex " not in raw_line:
-                    continue
-                text=raw_line.decode("utf-8", errors="replace")
-                for tag in VERTEX_TAG_PATTERN.findall(text):
-                    attrs=dict(XML_ATTRIBUTE_PATTERN.findall(tag))
-                    try:
-                        values=[float(attrs[key]) for key in ("x","y","z")]
-                    except (KeyError,ValueError):
-                        continue
-                    source_vertices.extend(values)
-                    for axis,value in enumerate(values):
-                        low[axis]=min(low[axis],value)
-                        high[axis]=max(high[axis],value)
+                if b"<vertex " in raw_line:
+                    for match in VERTEX_COORDINATES_BYTES_PATTERN.finditer(raw_line):
+                        try:
+                            values=[float(value) for value in match.groups()]
+                        except ValueError:
+                            continue
+                        source_vertices.extend(values)
+                        for axis,value in enumerate(values):
+                            low[axis]=min(low[axis],value)
+                            high[axis]=max(high[axis],value)
+                # 3MF mesh vertices precede triangles. Stop decompressing the
+                # much larger triangle section during this bounds pass.
+                if b"<triangle " in raw_line or b"<triangles" in raw_line:
+                    break
     if not source_vertices:
-        return None
+        return [],{}
 
     max_extent=max(high[axis]-low[axis] for axis in range(3)) or 1.0
     cell=max_extent/max(8,int(grid_resolution))
@@ -1719,18 +1750,40 @@ def export_preview_mesh(archive, colors, destination, material_prefix="slot",
             for raw_line in source:
                 if b"<triangle " not in raw_line:
                     continue
-                text=raw_line.decode("utf-8", errors="replace")
-                for tag in TRIANGLE_TAG_PATTERN.findall(text):
-                    attrs=dict(XML_ATTRIBUTE_PATTERN.findall(tag))
+                for match in TRIANGLE_INDICES_BYTES_PATTERN.finditer(raw_line):
                     try:
-                        mapped=tuple(display_index(offset+int(attrs[key])) for key in ("v1","v2","v3"))
-                    except (KeyError,ValueError):
+                        mapped=tuple(display_index(offset+int(value)) for value in match.groups())
+                    except ValueError:
                         continue
                     if None in mapped or len(set(mapped)) < 3:
                         continue
                     face_key=tuple(sorted(mapped))
                     if face_key not in display_faces:
-                        display_faces[face_key]=(mapped,preview_face_slot(attrs.get("paint_color"),len(colors)))
+                        paint_match=PAINT_CODE_BYTES_PATTERN.search(match.group(0))
+                        paint_code=paint_match.group(1) if paint_match else None
+                        display_faces[face_key]=(
+                            mapped,
+                            preview_face_slot(
+                                paint_code.decode("ascii",errors="replace") if paint_code else None,
+                                slot_count,
+                            ),
+                        )
+    return display_vertices,display_faces
+
+def export_preview_mesh(archive, colors, destination, material_prefix="slot",
+                        grid_resolution=PREVIEW_GRID_RESOLUTION, return_usage=False):
+    """
+    Write a reduced, colored viewport mesh without altering print geometry.
+    Object XML can be hundreds of megabytes, so this reads line-oriented 3MF
+    vertex/triangle records and clusters nearby display vertices.
+    """
+    destination=Path(destination).expanduser()
+    destination.parent.mkdir(parents=True,exist_ok=True)
+    obj_path=destination.with_suffix(".obj")
+    mtl_path=obj_path.with_suffix(".mtl")
+    display_vertices,display_faces=reduced_preview_geometry(archive,len(colors),grid_resolution)
+    if not display_vertices:
+        return (None,Counter()) if return_usage else None
 
     faces_by_slot={}
     for mapped,slot in display_faces.values():
@@ -1746,6 +1799,8 @@ def export_preview_mesh(archive, colors, destination, material_prefix="slot",
             output.write(f"usemtl {material_prefix}_{slot}\n")
             for first,second,third in faces_by_slot[slot]:
                 output.write(f"f {first} {second} {third}\n")
+    if return_usage:
+        return obj_path,Counter(slot for _,slot in display_faces.values())
     return obj_path
 
 def preview_slot_usage(archive, slot_count, grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION):
@@ -1754,73 +1809,83 @@ def preview_slot_usage(archive, slot_count, grid_resolution=OPTIMIZED_PREVIEW_GR
     This is a planning sample, not the final remap source: hidden/small paint
     states still get a guard weight from the original paint-state usage.
     """
-    model_names=sorted(
-        name for name in archive.namelist()
-        if name.lower().startswith("3d/objects/") and name.lower().endswith(".model")
-    )
-    if not model_names:
-        return Counter()
+    _,display_faces=reduced_preview_geometry(archive,slot_count,grid_resolution)
+    return Counter(slot for _,slot in display_faces.values())
 
-    source_vertices=array("f")
-    offsets={}
-    low=[float("inf")]*3
-    high=[float("-inf")]*3
-    for name in model_names:
-        offsets[name]=len(source_vertices)//3
-        with archive.open(name) as source:
-            for raw_line in source:
-                if b"<vertex " not in raw_line:
-                    continue
-                text=raw_line.decode("utf-8", errors="replace")
-                for tag in VERTEX_TAG_PATTERN.findall(text):
-                    attrs=dict(XML_ATTRIBUTE_PATTERN.findall(tag))
-                    try:
-                        values=[float(attrs[key]) for key in ("x","y","z")]
-                    except (KeyError,ValueError):
-                        continue
-                    source_vertices.extend(values)
-                    for axis,value in enumerate(values):
-                        low[axis]=min(low[axis],value)
-                        high[axis]=max(high[axis],value)
-    if not source_vertices:
-        return Counter()
+def preview_cache_identity(source, slot_count, grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION):
+    source=Path(source).expanduser().resolve()
+    stat=source.stat()
+    return {
+        "version":PREVIEW_CACHE_VERSION,
+        "size":stat.st_size,
+        "modifiedNs":stat.st_mtime_ns,
+        "slotCount":int(slot_count),
+        "gridResolution":int(grid_resolution),
+    }
 
-    max_extent=max(high[axis]-low[axis] for axis in range(3)) or 1.0
-    cell=max_extent/max(8,int(grid_resolution))
-    clustered={}
-    display_faces={}
+def default_preview_cache_path(source, slot_count=0,
+                               grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION):
+    source=Path(source).expanduser().resolve()
+    identity=preview_cache_identity(source,slot_count,grid_resolution)
+    key=hashlib.sha256(
+        f"{source}|{identity['size']}|{identity['modifiedNs']}|{slot_count}|{grid_resolution}|{PREVIEW_CACHE_VERSION}".encode()
+    ).hexdigest()[:24]
+    return Path(tempfile.gettempdir())/"FullSpectrumStudio"/"preview-cache"/f"{key}.json"
 
-    def display_index(source_index):
-        base=source_index*3
-        if base+2 >= len(source_vertices):
+def load_preview_cache(cache_path, source, slot_count,
+                       grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION):
+    if not cache_path:
+        return None
+    cache_path=Path(cache_path).expanduser()
+    try:
+        payload=json.loads(cache_path.read_text(encoding="utf-8"))
+        if payload.get("identity") != preview_cache_identity(source,slot_count,grid_resolution):
             return None
-        point=(source_vertices[base],source_vertices[base+1],source_vertices[base+2])
-        key=tuple(int(math.floor((point[axis]-low[axis])/cell)) for axis in range(3))
-        mapped=clustered.get(key)
-        if mapped is None:
-            mapped=len(clustered)+1
-            clustered[key]=mapped
-        return mapped
+        mesh=Path(payload["mesh"]).expanduser()
+        if not mesh.is_file() or not mesh.with_suffix(".mtl").is_file():
+            return None
+        usage=Counter({int(slot):float(weight) for slot,weight in payload.get("usage",{}).items()})
+        if any(slot<1 or slot>slot_count for slot in usage):
+            return None
+        return {"path":cache_path,"mesh":mesh,"usage":usage}
+    except (OSError,ValueError,TypeError,KeyError,json.JSONDecodeError):
+        return None
 
-    for name in model_names:
-        offset=offsets[name]
-        with archive.open(name) as source:
-            for raw_line in source:
-                if b"<triangle " not in raw_line:
-                    continue
-                text=raw_line.decode("utf-8", errors="replace")
-                for tag in TRIANGLE_TAG_PATTERN.findall(text):
-                    attrs=dict(XML_ATTRIBUTE_PATTERN.findall(tag))
-                    try:
-                        mapped=tuple(display_index(offset+int(attrs[key])) for key in ("v1","v2","v3"))
-                    except (KeyError,ValueError):
-                        continue
-                    if None in mapped or len(set(mapped)) < 3:
-                        continue
-                    face_key=tuple(sorted(mapped))
-                    if face_key not in display_faces:
-                        display_faces[face_key]=preview_face_slot(attrs.get("paint_color"),slot_count)
-    return Counter(display_faces.values())
+def write_preview_cache(cache_path, source, slot_count, mesh, usage,
+                        grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION):
+    cache_path=Path(cache_path).expanduser()
+    cache_path.parent.mkdir(parents=True,exist_ok=True)
+    payload={
+        "identity":preview_cache_identity(source,slot_count,grid_resolution),
+        "mesh":str(Path(mesh).expanduser().resolve()),
+        "usage":{str(slot):float(weight) for slot,weight in sorted(usage.items())},
+    }
+    temporary=Path(str(cache_path)+".tmp")
+    temporary.write_text(json.dumps(payload,separators=(",",":")),encoding="utf-8")
+    temporary.replace(cache_path)
+    return cache_path
+
+def ensure_preview_cache(source, colors, cache_path=None,
+                         grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION,
+                         progress=lambda fraction,message: None):
+    source=Path(source).expanduser().resolve()
+    cache_path=Path(cache_path).expanduser() if cache_path else default_preview_cache_path(
+        source,len(colors),grid_resolution
+    )
+    cached=load_preview_cache(cache_path,source,len(colors),grid_resolution)
+    if cached:
+        return cached
+    progress(0.205,"Building reusable optimized preview cache")
+    mesh_path=cache_path.with_suffix(".obj")
+    with zipfile.ZipFile(source) as archive:
+        validated_archive_infos(archive)
+        mesh,usage=export_preview_mesh(
+            archive,colors,mesh_path,"slot",grid_resolution,return_usage=True
+        )
+    if mesh is None:
+        return None
+    write_preview_cache(cache_path,source,len(colors),mesh,usage,grid_resolution)
+    return {"path":cache_path,"mesh":Path(mesh),"usage":usage}
 
 def blend_preview_usage(paint_usage, preview_usage):
     paint_total=sum(paint_usage.values()) or 1.0
@@ -1944,6 +2009,27 @@ def resolve_pinned_anchors(pool, anchor_keys):
             + ", ".join(missing)
         )
     return resolved
+
+def restrict_allowed_anchors(pool, anchor_keys):
+    requested=normalize_anchor_keys(anchor_keys)
+    if not requested:
+        return list(pool)
+    allowed=[]
+    missing=[]
+    for key in requested:
+        matches=[candidate for candidate in pool if anchor_matches_key(candidate,key)]
+        if not matches:
+            missing.append(key)
+            continue
+        for candidate in matches:
+            if anchor_key(candidate) not in {anchor_key(item) for item in allowed}:
+                allowed.append(candidate)
+    if missing:
+        raise RuntimeError(
+            "Selected filament colors are not available with the current source/material filters: "
+            + ", ".join(missing)
+        )
+    return allowed
 
 def nearest_anchor_error(color, anchors):
     return min((dist(color,anchor_color(anchor)),i+1,anchor_name(anchor),anchor_color(anchor))
@@ -2128,10 +2214,12 @@ def palette_selection_score(old_colors, usage, anchors, quality_bias, mix_model=
 def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slots="auto",
                    custom_catalog_path=None, reference=None, mix_model="bambu",
                    quality_bias=DEFAULT_QUALITY_BIAS, planner_mode="best",
-                   material_families=None, pinned_anchor_keys=None):
+                   material_families=None, pinned_anchor_keys=None,
+                   allowed_anchor_keys=None):
     planner_mode=normalize_planner_mode(planner_mode)
     material_families=normalize_material_families(material_families)
     pinned_anchor_keys=normalize_anchor_keys(pinned_anchor_keys)
+    allowed_anchor_keys=normalize_anchor_keys(allowed_anchor_keys)
     requested=None if str(real_slots)=="auto" else int(real_slots)
     mix_limit=quality_mix_limit(quality_bias)
     minimum=4 if mode=="cmykw" else MIN_REAL_SLOTS
@@ -2143,11 +2231,15 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
             raise RuntimeError("Material-family filters are not used with Exact CMYKW.")
         if pinned_anchor_keys:
             raise RuntimeError("Manual anchor pins are not used with Exact CMYKW.")
+        if allowed_anchor_keys:
+            raise RuntimeError("Filament color selection is not used with Exact CMYKW.")
         if mode!="cmykw":
             raise RuntimeError("Exact CMYKW filament source requires the CMYKW palette strategy")
         return exact_cmykw_palette()[:requested or maximum]
     if mode=="cmykw" and pinned_anchor_keys:
         raise RuntimeError("Manual anchor pins are available for Bambu PLA strategy. CMYKW chooses cyan, magenta, yellow, black and white roles.")
+    if mode=="cmykw" and allowed_anchor_keys:
+        raise RuntimeError("Filament color selection is available for Bambu PLA strategy. CMYKW chooses color roles automatically.")
     if palette_source=="inventory":
         pool=inventory_palette(inventory)
     elif palette_source=="custom":
@@ -2155,11 +2247,14 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
             raise RuntimeError("Material-family filters are available for Bambu filament sources, not custom JSON libraries.")
         if pinned_anchor_keys:
             raise RuntimeError("Manual anchor pins are available for Bambu filament sources, not custom JSON libraries.")
+        if allowed_anchor_keys:
+            raise RuntimeError("Filament color selection is available for Bambu filament sources, not custom JSON libraries.")
         pool=custom_palette(custom_catalog_path)
     else:
         pool=catalog_palette("all" if palette_source=="all-bambu" else "core",inventory,material_families)
     if palette_source=="inventory":
         pool=filter_material_families(pool,material_families)
+    pool=restrict_allowed_anchors(pool,allowed_anchor_keys)
     pinned_anchors=resolve_pinned_anchors(pool,pinned_anchor_keys)
     if requested is not None and len(pinned_anchors)>requested:
         raise RuntimeError(f"{len(pinned_anchors)} manual anchors were selected, but Physical slots is {requested}.")
@@ -2492,7 +2587,8 @@ def quality_metrics(rows, usage, old_colors=None, reference=None, mix_model="bam
     result["mixModel"]=mix_model
     return result
 
-def worst_color_match(rows, usage, palette_source, inventory, material_families=None):
+def worst_color_match(rows, usage, palette_source, inventory, material_families=None,
+                      allowed_anchor_keys=None):
     """Describe the least accurate visible source color and a useful inventory fix."""
     visible=[row for row in rows if float(usage.get(row[0],0.0))>0]
     if not visible:
@@ -2512,7 +2608,10 @@ def worst_color_match(rows, usage, palette_source, inventory, material_families=
     if palette_source!="inventory" or float(error)<=3:
         return result
 
-    owned=filter_material_families(inventory_palette(inventory),material_families)
+    owned=restrict_allowed_anchors(
+        filter_material_families(inventory_palette(inventory),material_families),
+        allowed_anchor_keys,
+    )
     owned_colors={anchor_color(item) for item in owned}
     owned_suggestion=min(owned,key=lambda item:dist(target,anchor_color(item))) if owned else None
     owned_error=dist(target,anchor_color(owned_suggestion)) if owned_suggestion else float("inf")
@@ -2591,23 +2690,29 @@ def printability_metrics(rows, usage, real_count, output_count, layouts, project
         "recommendations":suggestions,
     }
 
-def candidate_palette(palette_source, inventory, custom_catalog_path, material_families=None):
+def candidate_palette(palette_source, inventory, custom_catalog_path, material_families=None,
+                      allowed_anchor_keys=None):
     if palette_source=="inventory":
-        return filter_material_families(inventory_palette(inventory), material_families)
+        pool=filter_material_families(inventory_palette(inventory), material_families)
+        return restrict_allowed_anchors(pool,allowed_anchor_keys)
     if palette_source=="custom":
         return custom_palette(custom_catalog_path)
     if palette_source=="exact-cmykw":
         return []
-    return catalog_palette("all" if palette_source=="all-bambu" else "core",inventory,material_families)
+    pool=catalog_palette("all" if palette_source=="all-bambu" else "core",inventory,material_families)
+    return restrict_allowed_anchors(pool,allowed_anchor_keys)
 
 def additional_anchor_recommendation(old_colors, usage, anchors, palette_source, inventory,
                                      custom_catalog_path, quality_bias, mix_model, current_quality,
-                                     planner_mode="best", material_families=None):
+                                     planner_mode="best", material_families=None,
+                                     allowed_anchor_keys=None):
     if len(anchors)>=MAX_REAL_SLOTS or palette_source=="exact-cmykw":
         return None
     selected={anchor_color(anchor) for anchor in anchors}
     best=None
-    for candidate in candidate_palette(palette_source,inventory,custom_catalog_path,material_families):
+    for candidate in candidate_palette(
+        palette_source,inventory,custom_catalog_path,material_families,allowed_anchor_keys
+    ):
         if anchor_color(candidate) in selected:
             continue
         trial=anchors+[candidate]
@@ -2670,7 +2775,8 @@ def plan_preview_payload(infile, mode, palette_source, planner_mode, planning_sa
                          real_count, newc, rows, anchors, real_profiles, quality_bias,
                          quality_bias_mode, quality, printability, recommendation,
                          reference_result, imported, warnings, material_families=None,
-                         pinned_anchor_keys=None, analysis_assets=None, worst_match=None):
+                         pinned_anchor_keys=None, allowed_anchor_keys=None,
+                         analysis_assets=None, worst_match=None):
     return {
         "type":"planPreview",
         "input":str(infile),
@@ -2684,6 +2790,7 @@ def plan_preview_payload(infile, mode, palette_source, planner_mode, planning_sa
         "catalogSource":catalog_source_label,
         "materialFamilies":material_families or [],
         "pinnedAnchorKeys":pinned_anchor_keys or [],
+        "allowedAnchorKeys":allowed_anchor_keys or [],
         "sourceSlots":oldn,
         "realSlots":real_count,
         "outputSlots":len(newc),
@@ -2759,7 +2866,8 @@ def append_unique_quality(queue, seen, values, allowed=None):
 
 def select_smart_palette(old_colors, usage, mode, inventory, palette_source, real_slots="auto",
                          custom_catalog_path=None, reference=None, mix_model="bambu", planner_mode="best",
-                         progress=None, material_families=None, pinned_anchor_keys=None):
+                         progress=None, material_families=None, pinned_anchor_keys=None,
+                         allowed_anchor_keys=None):
     planner_mode=normalize_planner_mode(planner_mode)
     candidates=list(SMART_QUALITY_CANDIDATES)
     if mode=="cmykw":
@@ -2789,7 +2897,7 @@ def select_smart_palette(old_colors, usage, mode, inventory, palette_source, rea
             anchors=select_anchors(
                 old_colors,usage,mode,inventory,palette_source,real_slots,
                 custom_catalog_path,reference,mix_model,quality_bias,planner_mode,
-                material_families,pinned_anchor_keys
+                material_families,pinned_anchor_keys,allowed_anchor_keys
             )
             palette=build_palette(old_colors,anchors,usage,quality_bias,mix_model,planner_mode)
             rows=palette[-1]
@@ -2890,20 +2998,27 @@ def plan_analysis_preview_colors(old_colors, rows, real_count):
     return predicted,heat,influence
 
 def build_plan_analysis_assets(project_file, old_colors, rows, real_count, analysis_dir, warnings,
-                               progress=lambda fraction,message: None):
+                               progress=lambda fraction,message: None, source_preview_mesh=None):
     if not analysis_dir:
         return None
     analysis_root=Path(analysis_dir).expanduser().resolve()
     analysis_root.mkdir(parents=True,exist_ok=True)
     predicted_colors,heat_colors,influence_colors=plan_analysis_preview_colors(old_colors,rows,real_count)
-    with zipfile.ZipFile(project_file) as archive:
-        metrics=project_mesh_metrics(archive)
-        optimized=metrics["triangleCount"]>MAX_INTERACTIVE_PREVIEW_TRIANGLES
-        progress(0.86,"Building live predicted palette preview")
-        predicted=export_preview_mesh(
-            archive,predicted_colors,analysis_root/"plan-predicted.obj","slot",
-            grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION if optimized else PREVIEW_GRID_RESOLUTION,
+    progress(0.86,"Building live predicted palette preview")
+    source_preview_mesh=Path(source_preview_mesh).expanduser() if source_preview_mesh else None
+    if source_preview_mesh and source_preview_mesh.is_file():
+        optimized=True
+        predicted=recolor_preview_mesh(
+            source_preview_mesh,predicted_colors,analysis_root/"plan-predicted.obj","slot"
         )
+    else:
+        with zipfile.ZipFile(project_file) as archive:
+            metrics=project_mesh_metrics(archive)
+            optimized=metrics["triangleCount"]>MAX_INTERACTIVE_PREVIEW_TRIANGLES
+            predicted=export_preview_mesh(
+                archive,predicted_colors,analysis_root/"plan-predicted.obj","slot",
+                grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION if optimized else PREVIEW_GRID_RESOLUTION,
+            )
     if optimized:
         warnings.append(
             "Using an optimized display mesh for the live forecast; the source print geometry is unchanged."
@@ -2967,14 +3082,7 @@ def remap_model_setting_extruders(tmp, old_slot_to_new_slot):
         tree.write(path,encoding="UTF-8",xml_declaration=True)
     return changed
 
-def model_setting_extruder_slots(tmp, slot_count):
-    path=tmp/"Metadata"/"model_settings.config"
-    if not path.exists():
-        return set()
-    try:
-        root=ET.parse(path).getroot()
-    except (ET.ParseError,OSError) as exc:
-        raise RuntimeError("Could not read source object filament assignments") from exc
+def extruder_slots_from_root(root, slot_count):
     slots=set()
     for metadata in root.iter("metadata"):
         if metadata.get("key") != "extruder":
@@ -2989,6 +3097,27 @@ def model_setting_extruder_slots(tmp, slot_count):
             raise RuntimeError(f"Source object references missing extruder slot {slot}")
         slots.add(slot)
     return slots
+
+def model_setting_extruder_slots(tmp, slot_count):
+    path=tmp/"Metadata"/"model_settings.config"
+    if not path.exists():
+        return set()
+    try:
+        root=ET.parse(path).getroot()
+    except (ET.ParseError,OSError) as exc:
+        raise RuntimeError("Could not read source object filament assignments") from exc
+    return extruder_slots_from_root(root,slot_count)
+
+def archive_model_setting_extruder_slots(archive, slot_count):
+    name=next((item for item in archive.namelist()
+               if item.lower().endswith("metadata/model_settings.config")),None)
+    if not name:
+        return set()
+    try:
+        root=ET.fromstring(archive.read(name))
+    except (ET.ParseError,OSError,KeyError) as exc:
+        raise RuntimeError("Could not read source object filament assignments") from exc
+    return extruder_slots_from_root(root,slot_count)
 
 def include_model_extruder_usage(paint_usage, extruder_slots):
     usage=Counter(paint_usage or {})
@@ -3257,12 +3386,14 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             mix_model="bambu", analysis_dir=None, texture_override=None,
             internal_colors=48, catalog_region="global", planner_mode="best",
             planning_sample="paint", plan_only=False, material_families=None,
-            pinned_anchor_keys=None, progress=lambda fraction,message: None):
+            pinned_anchor_keys=None, allowed_anchor_keys=None, preview_cache=None,
+            progress=lambda fraction,message: None):
     infile=Path(infile).expanduser().resolve()
     planner_mode=normalize_planner_mode(planner_mode)
     planning_sample=normalize_planning_sample(planning_sample)
     material_families=normalize_material_families(material_families)
     pinned_anchor_keys=normalize_anchor_keys(pinned_anchor_keys)
+    allowed_anchor_keys=normalize_anchor_keys(allowed_anchor_keys)
     quality_bias_mode="auto" if is_auto_quality_bias(quality_bias) else "manual"
     quality_bias=DEFAULT_QUALITY_BIAS if quality_bias_mode=="auto" else clamp_quality_bias(quality_bias)
     catalog_region=str(catalog_region or "global").strip().lower()
@@ -3319,33 +3450,70 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
                 f"Catalog colors are planning choices for {region_label}. "
                 "FullSpectrum does not check live store stock; verify availability before buying filament."
             )
-        progress(0.14,"Extracting and scanning source 3MF archive")
-        with zipfile.ZipFile(project_file) as z:
-            names=z.namelist()
-            safe_extract_archive(z,tmp)
-        psrel=find_project_settings(names)
-        if not psrel: raise RuntimeError("No project_settings.config found")
-        pspath=tmp/psrel
-        obj=read_json_config(pspath)
-        old=colors_from_project(obj); oldn=len(old)
-        if not old: raise RuntimeError("No filament_colour array found")
-        progress(0.17,"Fingerprinting source geometry and paint data")
-        preservation=preservation_snapshot(tmp,psrel)
+        pspath=None
+        preservation=None
+        if plan_only:
+            progress(0.14,"Reading source palette and paint states")
+            with zipfile.ZipFile(project_file) as source_archive:
+                validated_archive_infos(source_archive)
+                names=source_archive.namelist()
+                psrel=find_project_settings(names)
+                if not psrel:
+                    raise RuntimeError("No project_settings.config found")
+                try:
+                    obj,_=json.JSONDecoder().raw_decode(
+                        source_archive.read(psrel).decode("utf-8",errors="replace").lstrip()
+                    )
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(
+                        f"Could not parse project settings: line {exc.lineno}, column {exc.colno}: {exc.msg}"
+                    ) from exc
+                old=colors_from_project(obj); oldn=len(old)
+                if not old:
+                    raise RuntimeError("No filament_colour array found")
+                progress(0.19,"Collecting existing Bambu paint states")
+                ordered_codes,code_counts=collect_archive_paint_codes(source_archive)
+                object_extruders=archive_model_setting_extruder_slots(source_archive,oldn)
+        else:
+            progress(0.14,"Extracting and scanning source 3MF archive")
+            with zipfile.ZipFile(project_file) as source_archive:
+                names=source_archive.namelist()
+                safe_extract_archive(source_archive,tmp)
+            psrel=find_project_settings(names)
+            if not psrel:
+                raise RuntimeError("No project_settings.config found")
+            pspath=tmp/psrel
+            obj=read_json_config(pspath)
+            old=colors_from_project(obj); oldn=len(old)
+            if not old:
+                raise RuntimeError("No filament_colour array found")
+            progress(0.17,"Fingerprinting source geometry and paint data")
+            preservation=preservation_snapshot(tmp,psrel)
+            progress(0.19,"Collecting existing Bambu paint states")
+            ordered_codes,code_counts=collect_paint_codes(tmp)
+            object_extruders=model_setting_extruder_slots(tmp,oldn)
         reference_result=analyze_reference(reference,reference_tmp) if reference else None
-        progress(0.19,"Collecting existing Bambu paint states")
-        ordered_codes, code_counts=collect_paint_codes(tmp)
         paint_usage=paint_slot_usage(code_counts, oldn)
-        object_extruders=model_setting_extruder_slots(tmp,oldn)
         paint_usage=include_model_extruder_usage(paint_usage,object_extruders)
         usage=paint_usage
+        planning_preview_mesh=None
+        preview_cache_result=None
+        if planning_sample=="preview" or analysis_dir:
+            cache_path=(Path(preview_cache).expanduser() if preview_cache else
+                        default_preview_cache_path(project_file,oldn))
+            preview_cache_result=ensure_preview_cache(
+                project_file,preview_colors_from_project(obj,mix_model),cache_path,
+                OPTIMIZED_PREVIEW_GRID_RESOLUTION,progress,
+            )
+            if preview_cache_result:
+                planning_preview_mesh=preview_cache_result["mesh"]
         if planning_sample=="preview":
             progress(0.205,"Sampling optimized preview mesh for visual color weighting")
-            with zipfile.ZipFile(project_file) as preview_archive:
-                preview_usage=preview_slot_usage(preview_archive,oldn)
+            preview_usage=(preview_cache_result or {}).get("usage",Counter())
             if preview_usage:
                 usage=blend_preview_usage(paint_usage,preview_usage)
                 warnings.append(
-                    "Planner used optimized preview-mesh color weighting. "
+                    "Planner used reusable optimized preview-mesh color weighting. "
                     "The final 3MF still remaps the original Bambu paint states exactly."
                 )
                 progress(0.215,f"Preview sample found {len(preview_usage)} visible painted slots")
@@ -3376,7 +3544,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             plan=select_smart_palette(
                 old,usage,mode,inventory,palette_source,real_slots,
                 custom_catalog_path,reference_result,mix_model,planner_mode,progress,
-                material_families,pinned_anchor_keys
+                material_families,pinned_anchor_keys,allowed_anchor_keys
             )
             quality_bias=plan["qualityBias"]
             anchors=plan["anchors"]
@@ -3392,7 +3560,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             progress(0.22,f"Generating {planner_mode} anchors from painted colors and " + source_label)
             anchors=select_anchors(old, usage, mode, inventory, palette_source,real_slots,
                                    custom_catalog_path,reference_result,mix_model,quality_bias,planner_mode,
-                                   material_families,pinned_anchor_keys)
+                                   material_families,pinned_anchor_keys,allowed_anchor_keys)
             progress(0.34,"Building mixes with useful predicted visual gain")
             newc,ism,comps,ratios,old_slot_to_new_slot,rows=build_palette(
                 old,anchors,usage,quality_bias,mix_model,planner_mode
@@ -3417,7 +3585,9 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             quality["smartSearchMode"]=smart_search_mode
             quality["skippedQualityCandidates"]=skipped_quality_candidates
         printability=printability_metrics(rows,usage,real_count,newn,layouts,obj)
-        worst_match=worst_color_match(rows,usage,palette_source,inventory,material_families)
+        worst_match=worst_color_match(
+            rows,usage,palette_source,inventory,material_families,allowed_anchor_keys
+        )
         mix_limit=quality_mix_limit(quality_bias)
         unmatched=[
             row for row in rows
@@ -3431,7 +3601,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             )
         recommendation=additional_anchor_recommendation(
             old,usage,anchors,palette_source,inventory,custom_catalog_path,
-            quality_bias,mix_model,quality,planner_mode,material_families
+            quality_bias,mix_model,quality,planner_mode,material_families,allowed_anchor_keys
         )
         if recommendation:
             printability["recommendations"].append(
@@ -3444,6 +3614,10 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
                 f"{len(pinned_anchor_keys)} Bambu anchor pin(s) were forced. "
                 "The planner optimized the remaining physical slots around those choices."
             )
+        if allowed_anchor_keys:
+            warnings.append(
+                f"Filament color selection limited planning to {len(allowed_anchor_keys)} enabled option(s)."
+            )
         if mode=="cmykw" and palette_source=="inventory":
             poor=[role for anchor,(role,target) in zip(anchors,CMYK_TARGETS)
                   if dist(anchor_color(anchor),target)>CMYKW_ROLE_WARNING_DE]
@@ -3453,15 +3627,15 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         real_profiles,mixed_profile=project_compatible_profiles(obj,anchors)
         if plan_only:
             analysis_assets=build_plan_analysis_assets(
-                project_file,old,rows,real_count,analysis_dir,warnings,progress
+                project_file,old,rows,real_count,analysis_dir,warnings,progress,planning_preview_mesh
             )
             progress(1.0,"Plan preview ready. No 3MF was written.")
             return plan_preview_payload(
                 infile,mode,palette_source,planner_mode,planning_sample,
                 catalog_region,region_label,catalog_source_label,oldn,real_count,newc,rows,
                 anchors,real_profiles,quality_bias,quality_bias_mode,quality,printability,
-                recommendation,reference_result,imported,warnings,material_families,pinned_anchor_keys,
-                analysis_assets,worst_match
+                recommendation,reference_result,imported,warnings,material_families,
+                pinned_anchor_keys,allowed_anchor_keys,analysis_assets,worst_match
             )
 
         representatives=source_slot_representatives(old,anchors,old_slot_to_new_slot,rows,newn)
@@ -3499,26 +3673,49 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
         if analysis_dir:
             analysis_root=Path(analysis_dir).expanduser().resolve()
             analysis_root.mkdir(parents=True,exist_ok=True)
-            heat_colors,influence_colors=analysis_preview_colors(newc,rows,real_count)
-            with zipfile.ZipFile(outfile) as written:
-                analysis_metrics=project_mesh_metrics(written)
-                if analysis_metrics["triangleCount"] > MAX_INTERACTIVE_PREVIEW_TRIANGLES:
-                    progress(0.84,"Building optimized preview overlays for large model")
-                    heatmap=export_preview_mesh(
-                        written,heat_colors,analysis_root/"color-loss.obj","loss",
-                        grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION,
-                    )
-                    warnings.append(
-                        "Using optimized preview overlays for large model; "
-                        "full source geometry was reduced only for display."
-                    )
-                else:
-                    progress(0.84,"Building analysis preview overlays")
-                    heatmap=export_preview_mesh(written,heat_colors,analysis_root/"color-loss.obj","loss")
-            influence=(recolor_preview_mesh(heatmap,influence_colors,analysis_root/"anchor-influence.obj","loss")
-                       if heatmap else None)
-            predicted=(recolor_preview_mesh(heatmap,newc,analysis_root/"predicted.obj","loss")
-                       if heatmap else None)
+            if planning_preview_mesh and Path(planning_preview_mesh).is_file():
+                progress(0.84,"Reusing preview cache for analysis overlays")
+                predicted_colors,heat_colors,influence_colors=plan_analysis_preview_colors(
+                    old,rows,real_count
+                )
+                predicted=recolor_preview_mesh(
+                    planning_preview_mesh,predicted_colors,analysis_root/"predicted.obj","slot"
+                )
+                heatmap=recolor_preview_mesh(
+                    planning_preview_mesh,heat_colors,analysis_root/"color-loss.obj","slot"
+                )
+                influence=recolor_preview_mesh(
+                    planning_preview_mesh,influence_colors,analysis_root/"anchor-influence.obj","slot"
+                )
+                warnings.append(
+                    "Using optimized preview overlays from the reusable display cache; "
+                    "full source geometry was unchanged."
+                )
+            else:
+                heat_colors,influence_colors=analysis_preview_colors(newc,rows,real_count)
+                with zipfile.ZipFile(outfile) as written:
+                    analysis_metrics=project_mesh_metrics(written)
+                    if analysis_metrics["triangleCount"] > MAX_INTERACTIVE_PREVIEW_TRIANGLES:
+                        progress(0.84,"Building optimized preview overlays for large model")
+                        heatmap=export_preview_mesh(
+                            written,heat_colors,analysis_root/"color-loss.obj","loss",
+                            grid_resolution=OPTIMIZED_PREVIEW_GRID_RESOLUTION,
+                        )
+                        warnings.append(
+                            "Using optimized preview overlays for large model; "
+                            "full source geometry was reduced only for display."
+                        )
+                    else:
+                        progress(0.84,"Building analysis preview overlays")
+                        heatmap=export_preview_mesh(
+                            written,heat_colors,analysis_root/"color-loss.obj","loss"
+                        )
+                influence=(recolor_preview_mesh(
+                    heatmap,influence_colors,analysis_root/"anchor-influence.obj","loss"
+                ) if heatmap else None)
+                predicted=(recolor_preview_mesh(
+                    heatmap,newc,analysis_root/"predicted.obj","loss"
+                ) if heatmap else None)
             analysis_assets={
                 "predictedMesh":str(predicted) if predicted else None,
                 "heatmapMesh":str(heatmap) if heatmap else None,
@@ -3604,6 +3801,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             f"Catalog color source: {catalog_source_label or 'not used for this palette source'}",
             f"Material family filter: {', '.join(material_families) if material_families else 'all supported Bambu PLA families for this source'}",
             f"Manual anchor pins: {', '.join(pinned_anchor_keys) if pinned_anchor_keys else 'none'}",
+            f"Enabled filament colors: {', '.join(allowed_anchor_keys) if allowed_anchor_keys else 'all available colors'}",
             f"Planner mode: {planner_mode.title()}",
             f"Planning sample: {'optimized preview mesh weighting' if planning_sample=='preview' else 'original paint-state usage'}",
             quality_line,
@@ -3662,6 +3860,7 @@ def convert(infile, mode, palette_source="inventory", output_dir=None, reveal=Tr
             "catalogSource":catalog_source_label,
             "materialFamilies":material_families,
             "pinnedAnchorKeys":pinned_anchor_keys,
+            "allowedAnchorKeys":allowed_anchor_keys,
             "sourceSlots":oldn,
             "realSlots":real_count,
             "outputSlots":newn,
@@ -3725,6 +3924,10 @@ def main():
                         help="Comma-separated Bambu PLA families to allow, for example 'PLA Basic,PLA Matte,PLA Pure'")
     parser.add_argument("--anchors",
                         help="Comma-separated Bambu anchor keys to pin, for example 'PLA Basic|#000000,PLA Matte|#FFFFFF'")
+    parser.add_argument("--allowed-anchors",
+                        help="Comma-separated Bambu anchor keys allowed in planning; other filament colors are excluded")
+    parser.add_argument("--preview-cache",
+                        help="Reusable optimized preview cache produced during project inspection")
     parser.add_argument("--catalog-region",choices=sorted(CATALOG_REGIONS),default="global",
                         help="Planning market shown in catalog warnings and reports")
     parser.add_argument("--analysis-dir",help="Optional local destination for heatmap and anchor-influence preview meshes")
@@ -3744,7 +3947,7 @@ def main():
 
     try:
         if args.inventory:
-            result=read_bambu_inventory(required=False)
+            result=read_bambu_inventory(required=False,minimum_colors=0)
         else:
             infile=Path(args.infile).expanduser() if args.infile else choose_file()
             if not infile or not infile.exists():
@@ -3789,6 +3992,8 @@ def main():
                     plan_only=args.plan_preview,
                     material_families=args.material_families,
                     pinned_anchor_keys=args.anchors,
+                    allowed_anchor_keys=args.allowed_anchors,
+                    preview_cache=args.preview_cache,
                     progress=reporter,
                 )
         if args.json_output:
