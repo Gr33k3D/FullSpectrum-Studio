@@ -29,6 +29,8 @@ from desktop.app_support import (
     plan_forecast,
     privacy_safe_error_message,
 )
+from desktop.filament_options import selectable_filament_options
+from desktop.settings_store import load_settings, save_settings
 
 
 def load_engine():
@@ -86,8 +88,42 @@ class StudioApp(tk.Tk):
         self.disabled_anchor_keys = set()
         self.pinned_anchor_keys = set()
         self.filament_selection_summary = tk.StringVar(value="Loading filament colors...")
+        self._restore_saved_settings()
         self._build()
+        self._update_filament_selection_summary()
         threading.Thread(target=self._refresh_inventory, daemon=True).start()
+
+    def _restore_saved_settings(self):
+        """Only explicitly saved preferences survive restart (not open models)."""
+        settings = load_settings()
+        fields = (
+            "custom", "strategy", "planner_mode", "planning_sample", "source",
+            "catalog_region", "real_slots", "mix_model", "quality_bias",
+            "smart_quality", "auto_preview", "auto_open", "output_application",
+        )
+        for field in fields:
+            if field in settings:
+                getattr(self, field).set(settings[field])
+        self.disabled_anchor_keys = set(settings.get("disabled_anchor_keys", []))
+        self.pinned_anchor_keys = set(settings.get("pinned_anchor_keys", []))
+
+    def save_user_settings(self):
+        """Persist settings to the user's config directory; do not bundle models."""
+        fields = (
+            "custom", "strategy", "planner_mode", "planning_sample", "source",
+            "catalog_region", "real_slots", "mix_model", "quality_bias",
+            "smart_quality", "auto_preview", "auto_open", "output_application",
+        )
+        settings = {field: getattr(self, field).get() for field in fields}
+        settings["disabled_anchor_keys"] = sorted(self.disabled_anchor_keys)
+        settings["pinned_anchor_keys"] = sorted(self.pinned_anchor_keys)
+        try:
+            save_settings(settings)
+        except OSError as error:
+            messagebox.showerror("Save Settings", f"Unable to save settings:\n{error}")
+            return
+        self.status.set("Settings saved. They will be restored at the next launch.")
+        messagebox.showinfo("Save Settings", "Your custom filament library and preferences were saved locally.")
 
     def _build(self):
         style = ttk.Style(self)
@@ -163,6 +199,7 @@ class StudioApp(tk.Tk):
             filament_row, text="Choose Filament Colors", command=self.open_filament_selector
         )
         self.filament_button.pack(side="left")
+        ttk.Button(filament_row, text="Save Settings", command=self.save_user_settings).pack(side="right", padx=(8, 0))
         ttk.Label(
             filament_row, textvariable=self.filament_selection_summary, style="Small.TLabel"
         ).pack(side="left", padx=(10, 0), fill="x", expand=True)
@@ -256,6 +293,7 @@ class StudioApp(tk.Tk):
             variable.trace_add("write", self.schedule_auto_preview)
         self.auto_preview.trace_add("write", self.schedule_auto_preview)
         self.source.trace_add("write", self._update_filament_selection_summary)
+        self.custom.trace_add("write", self._update_filament_selection_summary)
 
     def combo(self, parent, title, variable, values, column, row=0):
         parent.columnconfigure(column, weight=1)
@@ -274,43 +312,35 @@ class StudioApp(tk.Tk):
         self._update_filament_selection_summary()
 
     def _filament_options(self):
-        snapshot = self.inventory_snapshot
-        source = self.source.get()
-        if not snapshot or source not in ("inventory", "catalog", "all-bambu"):
+        try:
+            return selectable_filament_options(
+                ENGINE, self.source.get(), self.inventory_snapshot, self.custom.get()
+            )
+        except (OSError, ValueError, RuntimeError):
+            # A missing or invalid library is explained when opening the chooser.
+            # Keep forecast/status refreshes non-modal.
             return []
-        if source == "inventory":
-            raw = [
-                ENGINE.anchor_option_payload(item)
-                for item in ENGINE.inventory_palette(snapshot)
-            ]
-        else:
-            raw = list(snapshot.get("anchorOptions") or [])
-            if source == "catalog":
-                core = {"PLA Basic", "PLA Matte", "PLA Silk+"}
-                raw = [item for item in raw if item.get("series") in core]
-        unique = {}
-        for option in raw:
-            key = option.get("key")
-            if key and key not in unique:
-                unique[key] = option
-        return sorted(
-            unique.values(),
-            key=lambda item: (
-                item.get("remainingGrams") is None,
-                str(item.get("series") or ""),
-                str(item.get("name") or ""),
-            ),
-        )
 
     def _update_filament_selection_summary(self, *_):
         source = self.source.get()
-        if source not in ("inventory", "catalog", "all-bambu"):
+        if source not in ("inventory", "catalog", "all-bambu", "custom"):
             self.filament_selection_summary.set("Automatic for this filament source")
             return
-        if self.inventory_snapshot is None:
+        if source == "custom":
+            custom_path = self.custom.get().strip()
+            if not custom_path:
+                self.filament_selection_summary.set("Choose a custom JSON library")
+                return
+            if not Path(custom_path).is_file():
+                self.filament_selection_summary.set("Custom JSON library not found")
+                return
+        elif self.inventory_snapshot is None:
             self.filament_selection_summary.set("Loading filament colors...")
             return
         options = self._filament_options()
+        if not options:
+            self.filament_selection_summary.set("No usable colors in current source")
+            return
         option_keys = {item["key"] for item in options}
         self.disabled_anchor_keys.intersection_update(option_keys)
         self.pinned_anchor_keys.intersection_update(option_keys)
@@ -321,15 +351,20 @@ class StudioApp(tk.Tk):
         )
 
     def open_filament_selector(self):
-        options = self._filament_options()
+        try:
+            options = selectable_filament_options(
+                ENGINE, self.source.get(), self.inventory_snapshot, self.custom.get()
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            messagebox.showerror("Filament colors", f"Could not open filament library:\n{error}")
+            return
         if not options:
-            if self.inventory_snapshot is None:
+            if self.source.get() == "custom":
+                messagebox.showinfo("Filament colors", "Choose a custom filament JSON library first.")
+            elif self.inventory_snapshot is None and self.source.get() in ("inventory", "catalog", "all-bambu"):
                 messagebox.showinfo("Filament colors", "The Bambu Studio filament inventory is still loading.")
             else:
-                messagebox.showinfo(
-                    "Filament colors",
-                    "Choose My Inventory, Bambu Core, or All Bambu to select individual colors.",
-                )
+                messagebox.showinfo("Filament colors", "No selectable filament colors for this source.")
             return
 
         dialog = tk.Toplevel(self)
@@ -735,9 +770,16 @@ class StudioApp(tk.Tk):
             self.after(0, lambda: self.finish(result, "\n".join(text)))
             if options["auto_open"]:
                 self.open_validated_output(result["output"], options["output_application"])
+        
         except Exception as error:
             details = "".join(traceback.format_exception(type(error), error, error.__traceback__))
-            self.after(0, lambda: self.fail(str(error) or error.__class__.__name__, details, quiet=automatic))
+            self.after(
+                0,
+                self.fail,
+                str(error) or type(error).__name__,
+                details,
+                automatic,
+            )
 
     def finish(self, result, text):
         self.worker_active = False

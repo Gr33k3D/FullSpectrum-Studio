@@ -836,7 +836,7 @@ def read_bambu_inventory(required=True, minimum_colors=MIN_REAL_SLOTS):
             "initialGrams":round(float(raw.get("initial_weight") or remaining),1),
         })
     spools.sort(key=lambda item:(item["series"],item["color"],-item["remainingGrams"]))
-    if len({spool["color"] for spool in spools}) < minimum_colors:
+    if required and len({spool["color"] for spool in spools}) < minimum_colors:
         raise RuntimeError(f"Bambu Studio inventory needs at least {minimum_colors} distinct active PLA colors with remaining material.")
     return {
         "source":f"{inventory_label} local inventory",
@@ -2242,14 +2242,13 @@ def select_anchors(old_colors, usage, mode, inventory, palette_source, real_slot
         raise RuntimeError("Filament color selection is available for Bambu PLA strategy. CMYKW chooses color roles automatically.")
     if palette_source=="inventory":
         pool=inventory_palette(inventory)
+    
     elif palette_source=="custom":
         if material_families:
-            raise RuntimeError("Material-family filters are available for Bambu filament sources, not custom JSON libraries.")
-        if pinned_anchor_keys:
-            raise RuntimeError("Manual anchor pins are available for Bambu filament sources, not custom JSON libraries.")
-        if allowed_anchor_keys:
-            raise RuntimeError("Filament color selection is available for Bambu filament sources, not custom JSON libraries.")
-        pool=custom_palette(custom_catalog_path)
+            raise RuntimeError(
+                "Material-family filters are available for Bambu filament sources, not custom JSON libraries."
+            )
+        pool = custom_palette(custom_catalog_path)
     else:
         pool=catalog_palette("all" if palette_source=="all-bambu" else "core",inventory,material_families)
     if palette_source=="inventory":
